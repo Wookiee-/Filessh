@@ -312,9 +312,20 @@ ipcMain.handle('ssh:connect', async (e, { tabId, sessionId, quick, termType, log
     throw new Error('no session or quick-connect info');
   }
 
+  // Guard: never run two shells for one tab (double-clicks, retries).
+  closeTabResources(tabId);
   await openShell(tabId, cfg);
   return true;
 });
+
+function closeTabResources(tabId) {
+  const c = connections.get(tabId);
+  if (!c) return;
+  connections.delete(tabId);
+  if (c.teardown) { try { c.teardown(); } catch {} }
+  if (c.stream) { try { c.stream.close(); } catch {} }
+  if (c.client) { try { c.client.end(); } catch {} }
+}
 
 function splitList(str) {
   return String(str || '').split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
@@ -612,13 +623,7 @@ ipcMain.on('ssh:resize', (e, { tabId, cols, rows }) => {
 });
 
 ipcMain.handle('ssh:disconnect', (e, { tabId }) => {
-  const c = connections.get(tabId);
-  if (c) {
-    connections.delete(tabId);
-    if (c.teardown) { try { c.teardown(); } catch {} }
-    try { c.stream.close(); } catch {}
-    try { c.client.end(); } catch {}
-  }
+  closeTabResources(tabId);
   return true;
 });
 

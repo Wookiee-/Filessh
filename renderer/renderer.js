@@ -195,6 +195,9 @@ function wireTerminal(tabId, sessionId) {
   window.filessh.onStatus(tabId, (s) => {
     $('termstatus').textContent = s.status;
     $('termstatus').classList.toggle('error', /^(error|host key rejected)/i.test(s.status));
+    // A new shell prints its prompt on whatever line is current; mark
+    // reconnects so prompts never concatenate on one line.
+    if (/^reconnecting/i.test(s.status) && term) term.writeln('\r\n--- reconnecting ---');
   });
   window.filessh.onClosed(tabId, () => { $('termstatus').textContent = 'disconnected'; });
   $('term-close').onclick = async () => {
