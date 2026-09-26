@@ -45,22 +45,25 @@ body {
 /* ---- overview ---- */
 .view.hidden { display: none; }
 #overview { max-width: 1200px; margin: 0 auto; padding: 18px 20px 30px; }
-#searchrow, #quickrow { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+#searchrow, #quickwrap { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+#quickwrap { display: block; }
+#quickrow { display: flex; gap: 8px; flex-wrap: wrap; }
 #search {
   flex: 1; min-width: 220px; padding: 11px 14px 11px 36px;
   border: 1px solid var(--line); border-radius: var(--radius); font-size: 14px;
   background: #fff url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="%23999" stroke-width="2.4"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>') no-repeat 12px center;
   box-shadow: var(--shadow);
 }
+#quickwrap { margin-bottom: 10px; }
+#quickwrap > summary {
+  cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  padding: 4px 2px; list-style-position: inside;
+}
+#quickwrap > summary:hover { color: var(--accent); }
 #quickrow {
   background: var(--card); border: 1px solid var(--line);
   border-radius: var(--radius); padding: 10px; box-shadow: var(--shadow);
-  align-items: center;
-}
-#quickrow::before {
-  content: "Quick connect"; font-size: 11px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
-  padding: 0 4px;
+  align-items: center; margin-top: 6px;
 }
 #q-host, #q-user, #q-pass, #q-port,
 #e-name, #e-host, #e-port, #e-user, #e-password, #e-keyfile, #sftp-path,

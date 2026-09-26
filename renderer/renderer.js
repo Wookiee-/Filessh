@@ -207,7 +207,6 @@ function openEditor(s) {
 $('search').addEventListener('input', renderCards);
 $('q-connect').onclick = quickConnect;
 $('newtab').onclick = () => { activeTab = 'overview'; paintTabs(); $('search').focus(); };
-$('create').onclick = () => openEditor(null);
 $('manage').onclick = openManager;
 document.querySelector('#tabs .tab').onclick = () => { activeTab = 'overview'; paintTabs(); };
 $('import').onclick = async () => {

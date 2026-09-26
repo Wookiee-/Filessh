@@ -16,18 +16,20 @@
 
 <div id="overview" class="view">
   <div id="searchrow">
-    <input id="search" type="text" placeholder="Search or enter a session address…  (user@host:port)">
+    <input id="search" type="text" placeholder="Search sessions…">
     <button id="manage">Site Manager</button>
-    <button id="create">Create new session</button>
     <button id="import">Import FileZilla</button>
   </div>
-  <div id="quickrow">
-    <input id="q-host" placeholder="host">
-    <input id="q-user" placeholder="user">
-    <input id="q-pass" type="password" placeholder="password (optional)">
-    <input id="q-port" placeholder="22" size="4">
-    <button id="q-connect">Quick connect</button>
-  </div>
+  <details id="quickwrap">
+    <summary>Ad-hoc quick connect (unsaved)</summary>
+    <div id="quickrow">
+      <input id="q-host" placeholder="host">
+      <input id="q-user" placeholder="user">
+      <input id="q-pass" type="password" placeholder="password (optional)">
+      <input id="q-port" placeholder="22" size="4">
+      <button id="q-connect">Connect</button>
+    </div>
+  </details>
   <div id="cards"></div>
 </div>
 
