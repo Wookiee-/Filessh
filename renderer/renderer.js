@@ -4,7 +4,24 @@ let term = null, fit = null, currentTabId = null;
 
 const $ = (id) => document.getElementById(id);
 
+// ---- GUI theme (app chrome; terminal themes are separate) ----
+const GUI_THEMES = { light: 'Light', dark: 'Dark', nord: 'Nord', dracula: 'Dracula', solar: 'Solarized', ocean: 'Ocean' };
+let guiTheme = localStorage.getItem('filessh-gui-theme') || 'light';
+if (!GUI_THEMES[guiTheme]) guiTheme = 'light';
+function applyGuiTheme() {
+  document.body.dataset.guitheme = guiTheme;
+  localStorage.setItem('filessh-gui-theme', guiTheme);
+  if ($('gui-theme')) $('gui-theme').value = guiTheme;
+  if ($('s-guitheme') && $('s-guitheme').options.length) $('s-guitheme').value = guiTheme;
+}
+function setGuiTheme(name) {
+  if (!GUI_THEMES[name]) return;
+  guiTheme = name;
+  applyGuiTheme();
+}
+
 // ---- terminal themes + emulation prefs (persisted) ----
+// Groups: light schemes first, then dark + color variations.
 // Groups: light schemes first, then dark + color variations.
 const THEME_GROUPS = { Light: ['paper', 'github', 'solLight', 'latte'], Dark: ['dark', 'mocha', 'onedark', 'dracula', 'monokai', 'nord', 'solDark', 'gruvbox', 'tokyo', 'palenight'] };
 const THEMES = {
@@ -508,6 +525,21 @@ $('m-close').onclick = () => $('manager').close();
   function paintBlink() { $('t-blink').style.opacity = termPrefs.blink ? '1' : '0.45'; }
 })();
 
+// ---- GUI theme pickers (overview + settings share state) ----
+(function initGuiTheme() {
+  const quick = $('gui-theme'), inSettings = $('s-guitheme');
+  for (const [id, label] of Object.entries(GUI_THEMES)) {
+    const a = document.createElement('option');
+    a.value = id; a.textContent = label;
+    quick.appendChild(a);
+    const b = document.createElement('option');
+    b.value = id; b.textContent = label;
+    inSettings.appendChild(b);
+  }
+  quick.onchange = () => setGuiTheme(quick.value);
+  applyGuiTheme();
+})();
+
 // ---- app settings (persisted) ----
 let appSettings = { confirmClose: true, defaultReconnect: true, sftpPath: '.', copySelect: false, pasteRight: true, ka: 0, logDir: '', autoLog: false };
 try { Object.assign(appSettings, JSON.parse(localStorage.getItem('filessh-settings') || '{}')); } catch {}
@@ -534,6 +566,7 @@ function openSettings() {
   }
   st.value = termPrefs.theme;
   tm.value = termPrefs.term;
+  $('s-guitheme').value = guiTheme;
   $('s-fontsize').value = termPrefs.fontSize;
   $('s-confirm').checked = appSettings.confirmClose;
   $('s-reconnect').checked = appSettings.defaultReconnect;
@@ -549,6 +582,7 @@ function openSettings() {
 
 $('s-save').onclick = (ev) => {
   ev.preventDefault();
+  setGuiTheme($('s-guitheme').value);
   Object.assign(termPrefs, {
     theme: $('s-theme').value, term: $('s-term').value,
     fontSize: Math.min(24, Math.max(9, Number($('s-fontsize').value) || 14)),

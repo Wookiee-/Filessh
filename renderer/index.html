@@ -17,6 +17,7 @@
 <div id="overview" class="view">
   <div id="searchrow">
     <input id="search" type="text" placeholder="Search sessions…">
+    <select id="gui-theme" title="Interface theme"></select>
     <button id="manage">Site Manager</button>
     <button id="import">Import FileZilla</button>
   </div>
@@ -168,6 +169,7 @@
 <dialog id="settings">
   <form method="dialog" id="settings-form">
     <h3>Settings</h3>
+    <label>Interface theme <select id="s-guitheme"></select></label>
     <label>Default terminal theme <select id="s-theme"></select></label>
     <label>Default emulation (TERM) <select id="s-term"></select></label>
     <label>Default font size <input id="s-fontsize" type="number" min="9" max="24"></label>
