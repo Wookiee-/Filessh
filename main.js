@@ -258,7 +258,7 @@ async function verifyHostKey(tabId, host, port) {
 }
 
 // ---- SSH connect ----
-ipcMain.handle('ssh:connect', async (e, { tabId, sessionId, quick }) => {
+ipcMain.handle('ssh:connect', async (e, { tabId, sessionId, quick, termType }) => {
   const store = loadStore();
   let cfg;
   if (sessionId) {
@@ -267,10 +267,11 @@ ipcMain.handle('ssh:connect', async (e, { tabId, sessionId, quick }) => {
     cfg = {
       host: s.host, port: s.port || 22, username: s.username,
       password: decryptPw(s.passwordEnc), privateKey: s.keyfile ? fs.readFileSync(s.keyfile) : undefined,
+      termType: termType || 'xterm-256color',
       session: s,
     };
   } else if (quick) {
-    cfg = { host: quick.host, port: quick.port || 22, username: quick.username, password: quick.password, session: { name: `${quick.username}@${quick.host}`, startupScript: '', autoReconnect: true } };
+    cfg = { host: quick.host, port: quick.port || 22, username: quick.username, password: quick.password, termType: termType || 'xterm-256color', session: { name: `${quick.username}@${quick.host}`, startupScript: '', autoReconnect: true } };
   } else {
     throw new Error('no session or quick-connect info');
   }
@@ -290,7 +291,7 @@ function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
       const send = (ch, data) => { if (win && !win.isDestroyed()) win.webContents.send(ch, data); };
 
     client.on('ready', () => {
-      client.shell({ term: 'xterm-256color', cols: 120, rows: 30 }, (err, stream) => {
+      client.shell({ term: cfg.termType || 'xterm-256color', cols: 120, rows: 30 }, (err, stream) => {
         if (err) { reject(err); return; }
         connections.set(tabId, { client, stream, session: cfg.session, cfg });
         stream.on('close', () => {

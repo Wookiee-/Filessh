@@ -34,6 +34,16 @@
 <div id="termview" class="view hidden">
   <div id="termheader">
     <span id="termstatus">disconnected</span>
+    <select id="t-theme" title="Terminal theme"></select>
+    <select id="t-term" title="Emulation (TERM) — takes effect on next connect"></select>
+    <select id="t-cursor" title="Cursor style">
+      <option value="block">Block</option>
+      <option value="bar">Bar</option>
+      <option value="underline">Underline</option>
+    </select>
+    <button id="t-blink" title="Toggle cursor blink">Blink</button>
+    <button id="t-smaller" title="Smaller font">A−</button>
+    <button id="t-bigger" title="Larger font">A+</button>
     <button id="sftp-toggle">SFTP</button>
     <button id="term-close">Close</button>
   </div>

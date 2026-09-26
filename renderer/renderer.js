@@ -4,6 +4,30 @@ let term = null, fit = null, currentTabId = null;
 
 const $ = (id) => document.getElementById(id);
 
+// ---- terminal themes + emulation prefs (persisted) ----
+const THEMES = {
+  dark:      { background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc', selectionBackground: '#45475a' },
+  light:     { background: '#fafafa', foreground: '#333333', cursor: '#e8641b', selectionBackground: '#cce0ff' },
+  dracula:   { background: '#282a36', foreground: '#f8f8f2', cursor: '#f8f8f2', selectionBackground: '#44475a', black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c', blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#bfbfbf' },
+  solarized: { background: '#002b36', foreground: '#839496', cursor: '#93a1a1', selectionBackground: '#073642', black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5' },
+  monokai:   { background: '#272822', foreground: '#f8f8f2', cursor: '#f8f8f0', selectionBackground: '#49483e', black: '#272822', red: '#f92672', green: '#a6e22e', yellow: '#f4bf75', blue: '#66d9ef', magenta: '#ae81ff', cyan: '#a1efe4', white: '#f8f8f2' },
+  nord:      { background: '#2e3440', foreground: '#d8dee9', cursor: '#d8dee9', selectionBackground: '#434c5e', black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b', blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0' },
+};
+const TERM_TYPES = ['xterm-256color', 'xterm', 'vt100', 'screen', 'linux'];
+let termPrefs = { theme: 'dark', term: 'xterm-256color', fontSize: 14, cursor: 'block', blink: true };
+try { Object.assign(termPrefs, JSON.parse(localStorage.getItem('filessh-term-prefs') || '{}')); } catch {}
+function saveTermPrefs() { localStorage.setItem('filessh-term-prefs', JSON.stringify(termPrefs)); }
+
+function applyTermPrefs() {
+  if (!term) return;
+  term.options.theme = THEMES[termPrefs.theme] || THEMES.dark;
+  term.options.fontSize = termPrefs.fontSize;
+  term.options.cursorStyle = termPrefs.cursor;
+  term.options.cursorBlink = termPrefs.blink;
+  if (window.__fit) { try { window.__fit.fit(); } catch {} }
+  term.focus();
+}
+
 async function refresh() {
   sessions = await window.filessh.listSessions();
   renderCards();
@@ -47,7 +71,7 @@ async function openSession(s) {
   showTerminal(tabId, s.name);
   wireTerminal(tabId, s.id);
   try {
-    await window.filessh.connect({ tabId, sessionId: s.id });
+    await window.filessh.connect({ tabId, sessionId: s.id, termType: termPrefs.term });
   } catch (err) {
     $('termstatus').textContent = 'error: ' + (err.message || err);
     if (term) term.writeln('\r\n*** connection failed: ' + (err.message || err) + ' ***');
@@ -68,7 +92,7 @@ async function quickConnect() {
   showTerminal(tabId, `${user}@${target}`);
   wireTerminal(tabId, null);
   try {
-    await window.filessh.connect({ tabId, quick: { host: target, username: user, password, port } });
+    await window.filessh.connect({ tabId, quick: { host: target, username: user, password, port }, termType: termPrefs.term });
   } catch (err) {
     $('termstatus').textContent = 'error: ' + (err.message || err);
     if (term) term.writeln('\r\n*** connection failed: ' + (err.message || err) + ' ***');
@@ -94,7 +118,8 @@ function paintTabs() {
   });
   $('overview').classList.toggle('hidden', activeTab !== 'overview');
   $('termview').classList.toggle('hidden', activeTab === 'overview');
-  if (window.__fit && activeTab !== 'overview') setTimeout(() => window.__fit.fit(), 50);
+  if (window.__fit && activeTab !== 'overview') setTimeout(() => { window.__fit.fit(); if (term) term.focus(); }, 50);
+  else if (activeTab === 'overview') setTimeout(() => $('search').focus(), 50);
 }
 
 function showTerminal(tabId, label) {
@@ -103,12 +128,21 @@ function showTerminal(tabId, label) {
   paintTabs();
   $('termstatus').textContent = 'connecting…';
   if (term) { term.dispose(); }
-  term = new Terminal({ cursorBlink: true, fontSize: 14, theme: { background: '#000000' } });
+  term = new Terminal({
+    cursorBlink: termPrefs.blink,
+    cursorStyle: termPrefs.cursor,
+    fontSize: termPrefs.fontSize,
+    fontFamily: 'JetBrains Mono, Fira Code, Consolas, monospace',
+    scrollback: 5000,
+    theme: THEMES[termPrefs.theme] || THEMES.dark,
+  });
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open($('terminal'));
   fit.fit();
   window.__fit = fit;
+  term.focus(); // cursor starts in the terminal
+  $('terminal').onclick = () => term && term.focus();
   term.onData((d) => window.filessh.sendInput(tabId, btoa(unescape(encodeURIComponent(d)))));
   term.onResize(({ cols, rows }) => window.filessh.resize(tabId, cols, rows));
 }
@@ -117,7 +151,10 @@ function wireTerminal(tabId, sessionId) {
   window.filessh.onData(tabId, (b64) => {
     try { term.write(new Uint8Array(atob(b64).split('').map(c => c.charCodeAt(0)))); } catch {}
   });
-  window.filessh.onStatus(tabId, (s) => { $('termstatus').textContent = s.status; });
+  window.filessh.onStatus(tabId, (s) => {
+    $('termstatus').textContent = s.status;
+    $('termstatus').classList.toggle('error', /^(error|host key rejected)/i.test(s.status));
+  });
   window.filessh.onClosed(tabId, () => { $('termstatus').textContent = 'disconnected'; });
   $('term-close').onclick = async () => {
     await window.filessh.disconnect(tabId);
@@ -201,9 +238,10 @@ function showVerify(tabId, info) {
 }
 
 function ensureVerifyChoice(tabId) {
-  $('v-save').onclick = () => { window.filessh.respondVerify(tabId, 'save'); $('verify').close(); };
-  $('v-once').onclick = () => { window.filessh.respondVerify(tabId, 'once'); $('verify').close(); };
-  $('v-reject').onclick = () => { window.filessh.respondVerify(tabId, 'reject'); $('verify').close(); };
+  const done = (d) => { window.filessh.respondVerify(tabId, d); $('verify').close(); if (term) term.focus(); };
+  $('v-save').onclick = () => done('save');
+  $('v-once').onclick = () => done('once');
+  $('v-reject').onclick = () => done('reject');
 }
 
 // hook verify listener into tab creation
@@ -327,5 +365,31 @@ $('m-connect').onclick = async () => {
   openSession(sessions.find(x => x.id === mgrSelected));
 };
 $('m-close').onclick = () => $('manager').close();
+
+// ---- terminal appearance + emulation controls ----
+(function initTermControls() {
+  const themeSel = $('t-theme'), termSel = $('t-term'), cursorSel = $('t-cursor');
+  for (const name of Object.keys(THEMES)) {
+    const o = document.createElement('option');
+    o.value = name; o.textContent = name[0].toUpperCase() + name.slice(1);
+    themeSel.appendChild(o);
+  }
+  for (const t of TERM_TYPES) {
+    const o = document.createElement('option');
+    o.value = t; o.textContent = t;
+    termSel.appendChild(o);
+  }
+  themeSel.value = termPrefs.theme;
+  termSel.value = termPrefs.term;
+  cursorSel.value = termPrefs.cursor;
+  paintBlink();
+  themeSel.onchange = () => { termPrefs.theme = themeSel.value; saveTermPrefs(); applyTermPrefs(); };
+  termSel.onchange = () => { termPrefs.term = termSel.value; saveTermPrefs(); };
+  cursorSel.onchange = () => { termPrefs.cursor = cursorSel.value; saveTermPrefs(); applyTermPrefs(); };
+  $('t-blink').onclick = () => { termPrefs.blink = !termPrefs.blink; saveTermPrefs(); applyTermPrefs(); paintBlink(); };
+  $('t-smaller').onclick = () => { termPrefs.fontSize = Math.max(9, termPrefs.fontSize - 1); saveTermPrefs(); applyTermPrefs(); };
+  $('t-bigger').onclick = () => { termPrefs.fontSize = Math.min(24, termPrefs.fontSize + 1); saveTermPrefs(); applyTermPrefs(); };
+  function paintBlink() { $('t-blink').style.opacity = termPrefs.blink ? '1' : '0.45'; }
+})();
 
 refresh();
