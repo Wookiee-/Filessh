@@ -13,6 +13,21 @@ const { parseFileZillaXml, toFilesshSession } = require('./lib/filezilla');
 let win;
 const connections = new Map(); // tabId -> { client, stream, session, autoReconnect }
 
+// ---- debug trace (FILSESSH_DEBUG=1): JSON lines of shell/data events ----
+const DEBUG = process.env.FILSESSH_DEBUG === '1';
+let debugStream = null;
+function dbg(obj) {
+  if (!DEBUG) return;
+  try {
+    if (!debugStream) {
+      const p = path.join(os.homedir(), '.config', 'filessh', `debug-${Date.now()}.log`);
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      debugStream = fs.createWriteStream(p);
+    }
+    debugStream.write(JSON.stringify({ t: new Date().toISOString(), ...obj }) + '\n');
+  } catch {}
+}
+
 function storePath() {
   return path.join(app.getPath('userData'), 'sessions.json');
 }
@@ -489,6 +504,7 @@ function setupForwards(tabId, client, forwards, send) {
 
 function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
   const run = async () => {
+    dbg({ ev: 'openShell', tabId, attempt, host: cfg.host });
     // TOFU host-key check on first attempt only; reuse result on reconnects.
     if (attempt === 1 && accepted === undefined) {
       accepted = await verifyHostKey(tabId, cfg.host, cfg.port);
@@ -530,10 +546,12 @@ function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
         if (cfg.agentForward && cfg.agentSock) shellOpts.agentForward = true;
         client.shell({ term: cfg.termType || 'xterm-256color', cols: cfg.cols || 120, rows: cfg.rows || 30 }, shellOpts, (err, stream) => {
           if (err) { teardown(); reject(err); return; }
+          dbg({ ev: 'shell-open', tabId, attempt });
           connections.set(tabId, { client, stream, session: cfg.session, cfg, teardown });
           let sawExit = false;
-          stream.on('exit', () => { sawExit = true; }); // remote reported exit-status: clean logout
+          stream.on('exit', () => { sawExit = true; dbg({ ev: 'exit-status', tabId }); }); // remote reported exit-status: clean logout
           stream.on('close', () => {
+            dbg({ ev: 'close', tabId, sawExit });
             send(`ssh-closed-${tabId}`, { code: 'closed' });
             teardown();
             client.end();
@@ -553,6 +571,7 @@ function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
             }
           });
           stream.on('data', (d) => {
+            dbg({ ev: 'data', tabId, n: d.length, head: d.toString('base64').slice(0, 120) });
             send(`ssh-data-${tabId}`, d.toString('base64'));
             if (logStream) logStream.write(d);
           });
@@ -624,10 +643,12 @@ function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
 
 ipcMain.on('ssh:input', (e, { tabId, data }) => {
   const c = connections.get(tabId);
+  dbg({ ev: 'input', tabId, n: String(data || '').length });
   if (c && c.stream) c.stream.write(Buffer.from(String(data), 'base64'));
 });
 
 ipcMain.on('ssh:resize', (e, { tabId, cols, rows }) => {
+  dbg({ ev: 'resize', tabId, cols, rows });
   const c = connections.get(tabId);
   if (c && c.stream) c.stream.setWindow(rows, cols);
 });
