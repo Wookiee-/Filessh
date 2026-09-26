@@ -119,7 +119,7 @@ button:disabled { opacity: .45; cursor: default; }
 }
 #termheader select:hover, #termheader button:hover { border-color: var(--accent); color: #fff; }
 #termwrap { display: flex; flex: 1; min-height: 0; }
-#terminal { flex: 1; min-width: 0; padding: 6px 0 6px 8px; }
+#terminal { flex: 1; min-width: 0; padding: 0; }
 #sftp { width: 320px; background: #fff; border-left: 1px solid var(--line); display: flex; flex-direction: column; }
 #sftp.hidden { display: none; }
 #sftp-bar { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid var(--line); }

@@ -234,21 +234,29 @@ async function keyscan(host, port) {
   return keys;
 }
 
-async function knownFingerprints(host, port) {
-  try {
-    const { stdout } = await execFileAsync('ssh-keygen', ['-l', '-F', `[${host}]:${port}`, '-f', knownHostsPath()], { timeout: 10000 });
-    const fps = new Set();
-    for (const m of stdout.matchAll(/SHA256:[A-Za-z0-9+/]+/g)) fps.add(m[0]);
-    return fps;
-  } catch {
-    return new Set();
+async function knownFingerprints(host, port, file = knownHostsPath()) {
+  const fps = new Set();
+  // NOTE: `ssh-keygen -F [host]:port` does NOT match bare `host` lines
+  // (which is what ssh-keyscan writes for port 22), so query both forms.
+  const forms = [`[${host}]:${port}`];
+  if (Number(port) === 22) forms.push(host);
+  for (const form of forms) {
+    try {
+      const { stdout } = await execFileAsync('ssh-keygen', ['-l', '-F', form, '-f', file], { timeout: 10000 });
+      for (const m of stdout.matchAll(/SHA256:[A-Za-z0-9+/]+/g)) fps.add(m[0]);
+    } catch { /* no match in this form */ }
   }
+  return fps;
 }
 
 function saveKnownHost(lines) {
   const kh = knownHostsPath();
   fs.mkdirSync(path.dirname(kh), { recursive: true, mode: 0o700 });
-  fs.appendFileSync(kh, lines.join('\n') + '\n', { mode: 0o644 });
+  const existing = fs.existsSync(kh) ? fs.readFileSync(kh, 'utf-8') : '';
+  const keyOf = (l) => (l.trim().split(/\s+/)[2] || l); // key blob, or whole line
+  const fresh = lines.filter(l => !existing.includes(keyOf(l)));
+  if (!fresh.length) return;
+  fs.appendFileSync(kh, fresh.join('\n') + '\n', { mode: 0o644 });
 }
 
 function askVerify(tabId, payload) {
@@ -616,7 +624,7 @@ ipcMain.handle('ssh:disconnect', (e, { tabId }) => {
 
 // Exported only when required (tests); no-op when run as the Electron entry.
 if (typeof module !== 'undefined' && module.parent) {
-  module.exports = { startSocksServer, setupForwards, sha256fp, md5fp, splitList, sessionAlgorithms, sessionToCfg, resolveLogPath };
+  module.exports = { startSocksServer, setupForwards, sha256fp, md5fp, splitList, sessionAlgorithms, sessionToCfg, resolveLogPath, knownFingerprints, saveKnownHost, knownHostsPath };
 }
 
 // ---- graphical SFTP (Solar-PuTTY parity) ----
