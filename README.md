@@ -27,6 +27,23 @@ If you insisted on pure Python, you'd still embed xterm.js in a `QWebEngineView`
   - Keyfile path carry-over
   - Auto-detects `~/.config/filezilla/` and `~/.filezilla/`
 
+## Settings reference
+
+Per-site (Site Manager → Advanced sections):
+
+- Connection: keep-alive interval / max misses (`ServerAliveInterval`), jump-host/bastion session
+- Authentication: key-file picker, encrypted key passphrase, SSH agent forwarding toggle
+- Tunnels: Local (`-L`), Remote (`-R`), Dynamic SOCKS (`-D`) forwarding matrix
+- X11 forwarding checkbox + display screen
+- Crypto: cipher / KEX / host-key algorithm allow-lists (blank = ssh2 defaults)
+- Logging: per-session terminal log file (blank = auto `~/.config/filessh/logs/`)
+
+App Settings (File → Settings):
+
+- Terminal theme default, TERM emulation, font size, scrollback rows
+- Copy-on-select, right-click paste, close-tab confirm
+- SFTP initial path, log directory, log-all default, keep-alive + auto-reconnect defaults
+
 ## FileZilla paths probed
 
 - `~/.config/filezilla/sitemanager.xml`

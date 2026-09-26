@@ -95,9 +95,47 @@
       </label>
       <label>User <input id="m-user"></label>
       <label>Password <input id="m-password" type="password" placeholder="(unchanged)"></label>
-      <label>Key file <input id="m-keyfile" placeholder="/path/to/key"></label>
+      <label>Key file
+        <span class="pickrow"><input id="m-keyfile" placeholder="/path/to/key"><button id="m-keybrowse" type="button">Browse…</button></span>
+      </label>
+      <label>Key passphrase <input id="m-keypass" type="password" placeholder="(unchanged)"></label>
+      <label class="check"><input type="checkbox" id="m-agent"> SSH agent forwarding (-A)</label>
       <label>Post-connect script <textarea id="m-script" placeholder="one command per line"></textarea></label>
-      <label><input type="checkbox" id="m-reconnect" checked> Auto-reconnect</label>
+      <label class="check"><input type="checkbox" id="m-reconnect" checked> Auto-reconnect</label>
+
+      <details class="adv">
+        <summary>Connection: keep-alive &amp; jump host</summary>
+        <label>Keep-alive interval (s, 0 = off) <input id="m-ka-interval" type="number" min="0" max="3600" placeholder="0"></label>
+        <label>Keep-alive max misses <input id="m-ka-count" type="number" min="1" max="100" placeholder="3"></label>
+        <label>Jump host (bastion) <select id="m-jump"><option value="">Direct connection</option></select></label>
+      </details>
+
+      <details class="adv">
+        <summary>Tunnels: port forwarding</summary>
+        <div id="m-forwards"></div>
+        <button id="m-fwadd" type="button">+ Add tunnel</button>
+      </details>
+
+      <details class="adv">
+        <summary>X11 forwarding</summary>
+        <label class="check"><input type="checkbox" id="m-x11"> Enable X11 forwarding</label>
+        <label>Display screen <input id="m-x11screen" type="number" min="0" max="99" value="0"></label>
+      </details>
+
+      <details class="adv">
+        <summary>Crypto: ciphers &amp; key exchange</summary>
+        <label>Ciphers (blank = defaults) <input id="m-ciphers" placeholder="aes128-ctr,aes256-ctr,aes128-gcm@openssh.com"></label>
+        <label>Key exchange <input id="m-kex" placeholder="curve25519-sha256,ecdh-sha2-nistp256,diffie-hellman-group-exchange-sha256"></label>
+        <label>Host key types <input id="m-hostkeys" placeholder="ssh-ed25519,ecdsa-sha2-nistp256,rsa-sha2-512"></label>
+      </details>
+
+      <details class="adv">
+        <summary>Session logging</summary>
+        <label class="check"><input type="checkbox" id="m-log"> Save terminal output to file</label>
+        <label>Log file (blank = auto)
+          <span class="pickrow"><input id="m-logpath" placeholder="auto"><button id="m-logbrowse" type="button">Browse…</button></span>
+        </label>
+      </details>
       <menu>
         <button id="m-connect">Connect</button>
         <button id="m-save">Save</button>
@@ -117,12 +155,34 @@
     <input id="e-user" placeholder="Username" required>
     <select id="e-auth"><option value="password">Password</option><option value="key">Private key</option></select>
     <input id="e-password" type="password" placeholder="Password (saved encrypted)">
-    <input id="e-keyfile" placeholder="Key file path (optional)">
+    <span class="pickrow"><input id="e-keyfile" placeholder="Key file path (optional)"><button id="e-keybrowse" type="button">…</button></span>
     <textarea id="e-script" placeholder="Post-connection script (one command per line)"></textarea>
     <label><input type="checkbox" id="e-reconnect" checked> Auto-reconnect</label>
     <menu>
       <button value="cancel">Cancel</button>
       <button id="e-save" value="default">Save</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="settings">
+  <form method="dialog" id="settings-form">
+    <h3>Settings</h3>
+    <label>Default terminal theme <select id="s-theme"></select></label>
+    <label>Default emulation (TERM) <select id="s-term"></select></label>
+    <label>Default font size <input id="s-fontsize" type="number" min="9" max="24"></label>
+    <label><input type="checkbox" id="s-confirm"> Confirm before closing a connected tab</label>
+    <label><input type="checkbox" id="s-reconnect"> New sites default to auto-reconnect</label>
+    <label>SFTP initial path <input id="s-sftppath" placeholder="."></label>
+    <label>Scrollback rows <input id="s-scrollback" type="number" min="100" max="50000" step="100"></label>
+    <label><input type="checkbox" id="s-copyselect"> Copy on select</label>
+    <label><input type="checkbox" id="s-pasteclick"> Right-click pastes</label>
+    <label>Default keep-alive (s, 0 = off) <input id="s-ka" type="number" min="0" max="3600"></label>
+    <label>Session log directory <input id="s-logdir" placeholder="~/.config/filessh/logs"></label>
+    <label><input type="checkbox" id="s-autolog"> Log all sessions by default</label>
+    <menu>
+      <button value="cancel">Cancel</button>
+      <button id="s-save" value="default">Save</button>
     </menu>
   </form>
 </dialog>

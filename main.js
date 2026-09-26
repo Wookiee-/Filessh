@@ -1,8 +1,9 @@
-const { app, BrowserWindow, ipcMain, safeStorage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
+const net = require('net');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
@@ -93,6 +94,7 @@ function createWindow() {
     width: 1280,
     height: 800,
     backgroundColor: '#1e1e1e',
+    icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -100,6 +102,19 @@ function createWindow() {
     },
   });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: 'File', submenu: [
+      { label: 'Site Manager', accelerator: 'Ctrl+M', click: () => win.webContents.send('menu:action', 'manager') },
+      { label: 'Import FileZilla…', click: () => win.webContents.send('menu:action', 'import') },
+      { type: 'separator' },
+      { label: 'Settings…', accelerator: 'Ctrl+,', click: () => win.webContents.send('menu:action', 'settings') },
+      { type: 'separator' },
+      { label: 'Quit', accelerator: 'Ctrl+Q', click: () => app.quit() },
+    ]},
+    { label: 'Session', submenu: [
+      { label: 'Close Tab', accelerator: 'Ctrl+W', click: () => win.webContents.send('menu:action', 'close-tab') },
+    ]},
+  ]));
 }
 
 app.whenReady().then(createWindow);
@@ -112,15 +127,17 @@ ipcMain.handle('sessions:list', () => {
 
 ipcMain.handle('sessions:save', (e, input) => {
   const store = loadStore();
-  const { password, ...rest } = input;
+  const { password, keyPassphrase, ...rest } = input;
   const record = { ...rest, id: rest.id || `s-${Date.now().toString(36)}` };
   if (password !== undefined) record.passwordEnc = password ? encryptPw(password) : '';
+  if (keyPassphrase !== undefined) record.keyPassphraseEnc = keyPassphrase ? encryptPw(keyPassphrase) : '';
   record.updatedAt = new Date().toISOString();
   const i = store.findIndex(s => s.id === record.id);
   if (i >= 0) store[i] = { ...store[i], ...record };
   else { record.createdAt = record.updatedAt; store.push(record); }
   saveStore(store);
-  return { ...record, password: undefined, hasPassword: !!record.passwordEnc };
+  const { passwordEnc, keyPassphraseEnc, ...safe } = record;
+  return { ...safe, password: undefined, hasPassword: !!record.passwordEnc, hasKeyPassphrase: !!record.keyPassphraseEnc };
 });
 
 ipcMain.handle('sessions:delete', (e, id) => {
@@ -149,6 +166,20 @@ ipcMain.handle('import:filezilla-autodetect', () => {
   ];
   const found = candidates.filter(f => fs.existsSync(f));
   return found;
+});
+
+// ---- generic file picker (key files, log paths) ----
+ipcMain.handle('dialog:open-file', async (e, { title, filters, save, defaultPath }) => {
+  if (save) {
+    const r = await dialog.showSaveDialog(win, { title: title || 'Choose file', defaultPath });
+    return r.canceled ? null : r.filePath;
+  }
+  const r = await dialog.showOpenDialog(win, {
+    title: title || 'Choose file',
+    filters: filters || [{ name: 'All files', extensions: ['*'] }],
+    properties: ['openFile'],
+  });
+  return r.canceled ? null : r.filePaths[0];
 });
 
 function importXml(xml) {
@@ -258,20 +289,17 @@ async function verifyHostKey(tabId, host, port) {
 }
 
 // ---- SSH connect ----
-ipcMain.handle('ssh:connect', async (e, { tabId, sessionId, quick, termType }) => {
+ipcMain.handle('ssh:connect', async (e, { tabId, sessionId, quick, termType, logDir, autoLog }) => {
   const store = loadStore();
   let cfg;
   if (sessionId) {
     const s = store.find(x => x.id === sessionId);
     if (!s) throw new Error('session not found');
-    cfg = {
-      host: s.host, port: s.port || 22, username: s.username,
-      password: decryptPw(s.passwordEnc), privateKey: s.keyfile ? fs.readFileSync(s.keyfile) : undefined,
-      termType: termType || 'xterm-256color',
-      session: s,
-    };
+    if (autoLog && s.logSession !== true && !s.logPath) s.logSession = true;
+    cfg = sessionToCfg(s, termType);
+    cfg.logDirBase = logDir || undefined;
   } else if (quick) {
-    cfg = { host: quick.host, port: quick.port || 22, username: quick.username, password: quick.password, termType: termType || 'xterm-256color', session: { name: `${quick.username}@${quick.host}`, startupScript: '', autoReconnect: true } };
+    cfg = { host: quick.host, port: quick.port || 22, username: quick.username, password: quick.password, termType: termType || 'xterm-256color', forwards: [], logSession: !!autoLog, logPath: '', logDirBase: logDir || undefined, session: { name: `${quick.username}@${quick.host}`, startupScript: '', autoReconnect: true } };
   } else {
     throw new Error('no session or quick-connect info');
   }
@@ -280,15 +308,232 @@ ipcMain.handle('ssh:connect', async (e, { tabId, sessionId, quick, termType }) =
   return true;
 });
 
+function splitList(str) {
+  return String(str || '').split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+}
+
+function sessionAlgorithms(s) {
+  const a = {};
+  const c = splitList(s.ciphers), k = splitList(s.kex), h = splitList(s.hostkeys);
+  if (c.length) a.cipher = c;
+  if (k.length) a.kex = k;
+  if (h.length) a.serverHostKey = h;
+  return Object.keys(a).length ? a : undefined;
+}
+
+function sessionToCfg(s, termType) {
+  return {
+    host: s.host, port: s.port || 22, username: s.username,
+    password: decryptPw(s.passwordEnc),
+    privateKey: s.keyfile ? fs.readFileSync(s.keyfile) : undefined,
+    passphrase: decryptPw(s.keyPassphraseEnc) || undefined,
+    termType: termType || 'xterm-256color',
+    keepaliveInterval: Number(s.keepaliveInterval) || 0,
+    keepaliveCountMax: Number(s.keepaliveCountMax) || 3,
+    agentForward: s.agentForward === true,
+    agentSock: process.env.SSH_AUTH_SOCK || undefined,
+    jumpSessionId: s.jumpSessionId || null,
+    forwards: Array.isArray(s.forwards) ? s.forwards : [],
+    x11: s.x11 === true, x11Screen: Number(s.x11Screen) || 0,
+    algorithms: sessionAlgorithms(s),
+    logSession: s.logSession === true, logPath: s.logPath || '',
+    session: s,
+  };
+}
+
+function resolveLogPath(cfg) {
+  if (cfg.logPath) return cfg.logPath;
+  const safe = String(cfg.session.name || `${cfg.username}@${cfg.host}`).replace(/[^A-Za-z0-9._-]+/g, '_');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const dir = cfg.logDirBase || path.join(os.homedir(), '.config', 'filessh', 'logs');
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, `${safe}-${stamp}.log`);
+}
+
+// Open a socket to the target through a saved jump-host session.
+async function openJumpSock(tabId, jumpSessionId, destHost, destPort) {
+  const store = loadStore();
+  const js = store.find(x => x.id === jumpSessionId);
+  if (!js) throw new Error('jump host session not found');
+  const jcfg = sessionToCfg(js);
+  const jc = new Client();
+  await new Promise((resolve, reject) => {
+    jc.on('ready', resolve);
+    jc.on('error', reject);
+    jc.on('keyboard-interactive', (n, i, l, p, finish) => finish([(jcfg.password || '')]));
+    jc.connect({
+      host: jcfg.host, port: jcfg.port, username: jcfg.username,
+      password: jcfg.password || undefined, privateKey: jcfg.privateKey,
+      tryKeyboard: true, readyTimeout: 15000,
+      keepaliveInterval: jcfg.keepaliveInterval || 0, keepaliveCountMax: jcfg.keepaliveCountMax,
+      algorithms: jcfg.algorithms,
+    });
+  });
+  const sock = await new Promise((resolve, reject) => {
+    jc.forwardOut('127.0.0.1', 0, destHost, destPort, (err, stream) => err ? reject(err) : resolve(stream));
+  });
+  return { jumpClient: jc, sock };
+}
+
+// Minimal SOCKS5 (no-auth, CONNECT only) fronting ssh forwardOut.
+function startSocksServer(client, bindHost, bindPort, onStatus) {
+  const server = net.createServer((socket) => {
+    let stage = 0, buf = Buffer.alloc(0);
+    socket.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      if (stage === 0) {
+        if (buf.length < 2) return;
+        const n = buf[1];
+        if (buf.length < 2 + n) return;
+        socket.write(Buffer.from([0x05, 0x00])); // no auth
+        buf = buf.slice(2 + n); stage = 1;
+      }
+      if (stage === 1) {
+        if (buf.length < 4) return;
+        if (buf[0] !== 0x05 || buf[1] !== 0x01) { socket.write(Buffer.from([0x05, 0x07, 0, 1, 0, 0, 0, 0, 0, 0])); socket.end(); return; }
+        const atyp = buf[3];
+        let addr, off;
+        if (atyp === 0x01) { if (buf.length < 10) return; addr = [...buf.slice(4, 8)].join('.'); off = 8; }
+        else if (atyp === 0x03) { const len = buf[4]; if (buf.length < 5 + len + 2) return; addr = buf.slice(5, 5 + len).toString(); off = 5 + len; }
+        else if (atyp === 0x04) { if (buf.length < 22) return; addr = buf.slice(4, 20).toString('hex').replace(/(.{4})(?=.)/g, '$1:'); off = 20; }
+        else { socket.write(Buffer.from([0x05, 0x08, 0, 1, 0, 0, 0, 0, 0, 0])); socket.end(); return; }
+        const port = buf.readUInt16BE(off);
+        stage = 2;
+        client.forwardOut('socks', 0, addr, port, (err, stream) => {
+          if (err) { socket.write(Buffer.from([0x05, 0x04, 0, 1, 0, 0, 0, 0, 0, 0])); socket.end(); return; }
+          socket.write(Buffer.from([0x05, 0x00, 0, 1, 0, 0, 0, 0, 0, 0]));
+          socket.pipe(stream).pipe(socket);
+          socket.on('error', () => { try { stream.close(); } catch {} });
+          stream.on('close', () => { try { socket.end(); } catch {} });
+        });
+      }
+    });
+    socket.on('error', () => {});
+  });
+  server.on('error', (err) => onStatus(`tunnel error (socks ${bindPort}): ${err.message}`));
+  server.listen(bindPort, bindHost || '127.0.0.1');
+  return server;
+}
+
+function setupForwards(tabId, client, forwards, send) {
+  const servers = [];
+  const remoteRoutes = [];
+  const status = (msg) => send(`ssh-status-${tabId}`, { status: msg });
+
+  client.on('tcp connection', (details, accept, reject) => {
+    const route = remoteRoutes.find(r => r.bindPort === details.destPort);
+    if (!route) return reject();
+    const out = net.connect(route.targetPort, route.targetHost, () => {
+      const stream = accept();
+      out.pipe(stream).pipe(out);
+    });
+    out.on('error', () => reject());
+  });
+
+  for (const f of forwards || []) {
+    const type = f.type || 'local';
+    try {
+      if (type === 'local') {
+        const srv = net.createServer((socket) => {
+          client.forwardOut(socket.remoteAddress || '127.0.0.1', socket.remotePort || 0, f.targetHost, Number(f.targetPort), (err, stream) => {
+            if (err) { socket.end(); return; }
+            socket.pipe(stream).pipe(socket);
+            socket.on('error', () => { try { stream.close(); } catch {} });
+          });
+        });
+        srv.on('error', (err) => status(`tunnel error (local ${f.bindPort}): ${err.message}`));
+        srv.listen(Number(f.bindPort), f.bindHost || '127.0.0.1');
+        servers.push(srv);
+      } else if (type === 'remote') {
+        remoteRoutes.push({ bindHost: f.bindHost || '127.0.0.1', bindPort: Number(f.bindPort), targetHost: f.targetHost, targetPort: Number(f.targetPort) });
+        client.forwardIn(f.bindHost || '127.0.0.1', Number(f.bindPort), (err) => {
+          if (err) status(`tunnel error (remote ${f.bindPort}): ${err.message || err}`);
+        });
+      } else if (type === 'dynamic') {
+        servers.push(startSocksServer(client, f.bindHost, Number(f.bindPort), status));
+      }
+    } catch (err) {
+      status(`tunnel error (${type} ${f.bindPort}): ${err.message}`);
+    }
+  }
+  // remote forwardIn needs the client-level listener registered before use; unforward on cleanup
+  return {
+    servers,
+    cleanup() {
+      for (const srv of servers) { try { srv.close(); } catch {} }
+      for (const r of remoteRoutes) { try { client.unforwardIn(r.bindHost || '127.0.0.1', r.bindPort, () => {}); } catch {} }
+    },
+  };
+}
+
 function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
   const run = async () => {
     // TOFU host-key check on first attempt only; reuse result on reconnects.
     if (attempt === 1 && accepted === undefined) {
       accepted = await verifyHostKey(tabId, cfg.host, cfg.port);
     }
+    // Optional bastion/jump host.
+    let jumpClient = null;
+    let sock = undefined;
+    const status0 = (msg) => { if (win && !win.isDestroyed()) win.webContents.send(`ssh-status-${tabId}`, { status: msg }); };
+    if (cfg.jumpSessionId) {
+      status0(`via jump host…`);
+      const j = await openJumpSock(tabId, cfg.jumpSessionId, cfg.host, cfg.port);
+      jumpClient = j.jumpClient; sock = j.sock;
+    }
+    // Session logging.
+    let logStream = null;
+    if (cfg.logSession) {
+      try {
+        const lp = resolveLogPath(cfg);
+        logStream = fs.createWriteStream(lp, { flags: 'a' });
+        logStream.write(`\n===== ${new Date().toISOString()} ${cfg.username}@${cfg.host}:${cfg.port} =====\n`);
+        status0(`logging to ${lp}`);
+      } catch (err) { status0(`logging disabled: ${err.message}`); }
+    }
     return new Promise((resolve, reject) => {
       const client = new Client();
       const send = (ch, data) => { if (win && !win.isDestroyed()) win.webContents.send(ch, data); };
+      let fwd = null;
+
+      const teardown = () => {
+        if (fwd) { try { fwd.cleanup(); } catch {} fwd = null; }
+        if (logStream) { try { logStream.end(); } catch {} logStream = null; }
+        if (jumpClient) { try { jumpClient.end(); } catch {} jumpClient = null; }
+      };
+
+      client.on('ready', () => {
+        fwd = setupForwards(tabId, client, cfg.forwards, send);
+        const shellOpts = {};
+        if (cfg.x11) shellOpts.x11 = { single: false, screen: cfg.x11Screen || 0 };
+        if (cfg.agentForward && cfg.agentSock) shellOpts.agentForward = true;
+        client.shell({ term: cfg.termType || 'xterm-256color', cols: 120, rows: 30 }, shellOpts, (err, stream) => {
+          if (err) { teardown(); reject(err); return; }
+          connections.set(tabId, { client, stream, session: cfg.session, cfg, teardown });
+          stream.on('close', () => {
+            send(`ssh-closed-${tabId}`, { code: 'closed' });
+            teardown();
+            client.end();
+            // auto-reconnect (Solar-PuTTY parity)
+            const st = connections.get(tabId);
+            if (st && cfg.session.autoReconnect !== false && attempt <= 3) {
+              setTimeout(() => {
+                send(`ssh-status-${tabId}`, { status: `reconnecting (attempt ${attempt})…` });
+                openShell(tabId, cfg, attempt + 1, accepted).catch(() => {});
+              }, 2000 * attempt);
+            }
+          });
+          stream.on('data', (d) => {
+            send(`ssh-data-${tabId}`, d.toString('base64'));
+            if (logStream) logStream.write(d);
+          });
+          // post-connection script (Solar-PuTTY parity)
+          const script = (cfg.session.startupScript || '').split('\n').map(l => l.trim()).filter(Boolean);
+          for (const line of script) stream.write(line + '\n');
+          send(`ssh-status-${tabId}`, { status: 'connected' });
+          resolve(true);
+        });
+      });
 
     client.on('ready', () => {
       client.shell({ term: cfg.termType || 'xterm-256color', cols: 120, rows: 30 }, (err, stream) => {
@@ -316,18 +561,24 @@ function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
     });
     client.on('error', (err) => {
       if (win && !win.isDestroyed()) win.webContents.send(`ssh-status-${tabId}`, { status: 'error: ' + err.message });
-      if (attempt === 1) reject(err);
+      if (attempt === 1) { teardown(); reject(err); }
     });
     client.on('keyboard-interactive', (name, instructions, lang, prompts, finish) => {
       finish([cfg.password || '']);
     });
     client.connect({
+      sock,
       host: cfg.host, port: cfg.port, username: cfg.username,
       password: cfg.password || undefined,
       privateKey: cfg.privateKey,
+      passphrase: cfg.passphrase,
+      agent: cfg.agentForward ? cfg.agentSock : undefined,
+      agentForward: cfg.agentForward === true,
       tryKeyboard: true,
       readyTimeout: 15000,
-      algorithms: undefined,
+      keepaliveInterval: cfg.keepaliveInterval || 0,
+      keepaliveCountMax: cfg.keepaliveCountMax || 3,
+      algorithms: cfg.algorithms,
       // Strict: handshake key must be one the user approved (or was already known).
       hostVerifier: accepted ? ((key) => accepted.has(sha256fp(Buffer.isBuffer(key) ? key : Buffer.from(key, 'hex')))) : undefined,
     });
@@ -356,11 +607,17 @@ ipcMain.handle('ssh:disconnect', (e, { tabId }) => {
   const c = connections.get(tabId);
   if (c) {
     connections.delete(tabId);
+    if (c.teardown) { try { c.teardown(); } catch {} }
     try { c.stream.close(); } catch {}
     try { c.client.end(); } catch {}
   }
   return true;
 });
+
+// Exported only when required (tests); no-op when run as the Electron entry.
+if (typeof module !== 'undefined' && module.parent) {
+  module.exports = { startSocksServer, setupForwards, sha256fp, md5fp, splitList, sessionAlgorithms, sessionToCfg, resolveLogPath };
+}
 
 // ---- graphical SFTP (Solar-PuTTY parity) ----
 ipcMain.handle('sftp:list', (e, { sessionId, remotePath }) => {
@@ -383,7 +640,11 @@ ipcMain.handle('sftp:list', (e, { sessionId, remotePath }) => {
       host: s.host, port: s.port || 22, username: s.username,
       password: decryptPw(s.passwordEnc) || undefined,
       privateKey: s.keyfile ? fs.readFileSync(s.keyfile) : undefined,
+      passphrase: decryptPw(s.keyPassphraseEnc) || undefined,
       tryKeyboard: true, readyTimeout: 15000,
+      keepaliveInterval: Number(s.keepaliveInterval) || 0,
+      keepaliveCountMax: Number(s.keepaliveCountMax) || 3,
+      algorithms: sessionAlgorithms(s),
     });
   });
 });

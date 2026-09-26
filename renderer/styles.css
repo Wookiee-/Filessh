@@ -134,6 +134,8 @@ dialog::backdrop { background: rgba(10, 14, 24, .5); backdrop-filter: blur(2px);
 dialog h3 { margin-top: 0; }
 dialog menu { display: flex; gap: 8px; justify-content: flex-end; padding: 0; margin: 14px 0 0; }
 #editor-form { display: flex; flex-direction: column; gap: 9px; min-width: min(360px, 80vw); }
+#settings-form { display: flex; flex-direction: column; gap: 9px; min-width: min(360px, 80vw); }
+#settings-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 #e-script { min-height: 60px; }
 #verify { max-width: 520px; }
 #verify code, #v-keys { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12.5px; }
@@ -151,5 +153,13 @@ dialog menu { display: flex; gap: 8px; justify-content: flex-end; padding: 0; ma
 #mgr-right { flex: 1; padding: 16px 20px; display: flex; flex-direction: column; gap: 9px; max-height: 80vh; overflow-y: auto; }
 #mgr-right h3 { margin: 0 0 2px; }
 #mgr-right label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+#mgr-right label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
+.pickrow { display: flex; gap: 6px; }
+.pickrow input { flex: 1; min-width: 0; }
+details.adv { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+details.adv > summary { cursor: pointer; font-weight: 600; font-size: 13px; padding: 4px 0; }
+details.adv > summary:hover { color: var(--accent); }
+.fw-row { display: grid; grid-template-columns: 86px 1fr 52px 1fr 52px auto; gap: 5px; align-items: center; margin-bottom: 6px; }
+.fw-row input, .fw-row select { padding: 6px; font-size: 12.5px; width: 100%; min-width: 0; }
 #m-status { min-height: 18px; font-size: 13px; color: #a00; }
 #q-pass { font-size: 13.5px; }

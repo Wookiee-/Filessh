@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('filessh', {
   importPath: () => ipcRenderer.invoke('import:filezilla-path'),
   importXml: (xml) => ipcRenderer.invoke('import:filezilla-xml', xml),
   autodetect: () => ipcRenderer.invoke('import:filezilla-autodetect'),
+  pickFile: (opts) => ipcRenderer.invoke('dialog:open-file', opts || {}),
   connect: (args) => ipcRenderer.invoke('ssh:connect', args),
   disconnect: (tabId) => ipcRenderer.invoke('ssh:disconnect', { tabId }),
   sendInput: (tabId, b64) => ipcRenderer.send('ssh:input', { tabId, data: b64 }),
@@ -17,4 +18,5 @@ contextBridge.exposeInMainWorld('filessh', {
   onClosed: (tabId, cb) => ipcRenderer.on(`ssh-closed-${tabId}`, (e, s) => cb(s)),
   onVerify: (tabId, cb) => ipcRenderer.on(`ssh-verify-${tabId}`, (e, info) => cb(info)),
   respondVerify: (tabId, decision) => ipcRenderer.send('ssh:verify-response', { tabId, decision }),
+  onMenu: (cb) => ipcRenderer.on('menu:action', (e, a) => cb(a)),
 });
