@@ -98,7 +98,7 @@ async function openSession(s) {
   showTerminal(tabId, s.name);
   wireTerminal(tabId, s.id);
   try {
-    await window.filessh.connect({ tabId, sessionId: s.id, termType: termPrefs.term, logDir: appSettings.logDir, autoLog: appSettings.autoLog });
+    await window.filessh.connect({ tabId, sessionId: s.id, termType: termPrefs.term, logDir: appSettings.logDir, autoLog: appSettings.autoLog, cols: term ? term.cols : 120, rows: term ? term.rows : 30 });
   } catch (err) {
     $('termstatus').textContent = 'error: ' + (err.message || err);
     if (term) term.writeln('\r\n*** connection failed: ' + (err.message || err) + ' ***');
@@ -119,7 +119,7 @@ async function quickConnect() {
   showTerminal(tabId, `${user}@${target}`);
   wireTerminal(tabId, null);
   try {
-    await window.filessh.connect({ tabId, quick: { host: target, username: user, password, port }, termType: termPrefs.term, logDir: appSettings.logDir, autoLog: appSettings.autoLog });
+    await window.filessh.connect({ tabId, quick: { host: target, username: user, password, port }, termType: termPrefs.term, logDir: appSettings.logDir, autoLog: appSettings.autoLog, cols: term ? term.cols : 120, rows: term ? term.rows : 30 });
   } catch (err) {
     $('termstatus').textContent = 'error: ' + (err.message || err);
     if (term) term.writeln('\r\n*** connection failed: ' + (err.message || err) + ' ***');
@@ -185,7 +185,14 @@ function showTerminal(tabId, label) {
     try { navigator.clipboard.writeText(term.getSelection()); } catch {}
   });
   term.onData((d) => window.filessh.sendInput(tabId, btoa(unescape(encodeURIComponent(d)))));
-  term.onResize(({ cols, rows }) => window.filessh.resize(tabId, cols, rows));
+  // Only forward genuine size changes: the pty already opens at the fitted
+  // size, so re-sending it would SIGWINCH readline mid-prompt and duplicate it.
+  let lastDims = { cols: term.cols, rows: term.rows };
+  term.onResize(({ cols, rows }) => {
+    if (cols === lastDims.cols && rows === lastDims.rows) return;
+    lastDims = { cols, rows };
+    window.filessh.resize(tabId, cols, rows);
+  });
 }
 
 function wireTerminal(tabId, sessionId) {
@@ -200,14 +207,8 @@ function wireTerminal(tabId, sessionId) {
     if (/^reconnecting/i.test(s.status) && term) term.writeln('\r\n--- reconnecting ---');
   });
   window.filessh.onClosed(tabId, () => { $('termstatus').textContent = 'disconnected'; });
-  $('term-close').onclick = async () => {
-    const connected = $('termstatus').textContent === 'connected';
-    if (connected && appSettings.confirmClose && !confirm(`Close ${document.querySelector(`#tabs .tab[data-tab="${tabId}"]`)?.textContent || 'tab'}?`)) return;
-    await window.filessh.disconnect(tabId);
-    document.querySelector(`#tabs .tab[data-tab="${tabId}"]`)?.remove();
-    activeTab = 'overview';
-    paintTabs();
-  };
+  window.filessh.onExited(tabId, () => closeTabUI(tabId, false)); // clean logout closes the tab
+  $('term-close').onclick = () => closeTabUI(tabId, true);
   $('sftp-toggle').onclick = () => $('sftp').classList.toggle('hidden');
   if ($('sftp-path').value === '.') $('sftp-path').value = appSettings.sftpPath || '.';
   $('sftp-go').onclick = async () => {
@@ -615,9 +616,23 @@ function doImport() {
   });
 }
 
+function closeTabUI(tabId, confirmClose) {
+  if (confirmClose) {
+    const connected = $('termstatus').textContent === 'connected';
+    if (connected && appSettings.confirmClose && !confirm(`Close ${document.querySelector(`#tabs .tab[data-tab="${tabId}"]`)?.textContent || 'tab'}?`)) return Promise.resolve(false);
+  }
+  return window.filessh.disconnect(tabId).then(() => {
+    document.querySelector(`#tabs .tab[data-tab="${tabId}"]`)?.remove();
+    if (currentTabId === tabId) currentTabId = null;
+    activeTab = 'overview';
+    paintTabs();
+    return true;
+  });
+}
+
 function closeActiveTab() {
   if (activeTab === 'overview' || !currentTabId) return;
-  $('term-close').click();
+  closeTabUI(currentTabId, true);
 }
 
 window.filessh.onMenu((action) => {

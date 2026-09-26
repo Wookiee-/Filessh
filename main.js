@@ -297,7 +297,7 @@ async function verifyHostKey(tabId, host, port) {
 }
 
 // ---- SSH connect ----
-ipcMain.handle('ssh:connect', async (e, { tabId, sessionId, quick, termType, logDir, autoLog }) => {
+ipcMain.handle('ssh:connect', async (e, { tabId, sessionId, quick, termType, logDir, autoLog, cols, rows }) => {
   const store = loadStore();
   let cfg;
   if (sessionId) {
@@ -306,8 +306,10 @@ ipcMain.handle('ssh:connect', async (e, { tabId, sessionId, quick, termType, log
     if (autoLog && s.logSession !== true && !s.logPath) s.logSession = true;
     cfg = sessionToCfg(s, termType);
     cfg.logDirBase = logDir || undefined;
+    cfg.cols = Number(cols) || 120;
+    cfg.rows = Number(rows) || 30;
   } else if (quick) {
-    cfg = { host: quick.host, port: quick.port || 22, username: quick.username, password: quick.password, termType: termType || 'xterm-256color', forwards: [], logSession: !!autoLog, logPath: '', logDirBase: logDir || undefined, session: { name: `${quick.username}@${quick.host}`, startupScript: '', autoReconnect: true } };
+    cfg = { host: quick.host, port: quick.port || 22, username: quick.username, password: quick.password, termType: termType || 'xterm-256color', forwards: [], logSession: !!autoLog, logPath: '', logDirBase: logDir || undefined, cols: Number(cols) || 120, rows: Number(rows) || 30, session: { name: `${quick.username}@${quick.host}`, startupScript: '', autoReconnect: true } };
   } else {
     throw new Error('no session or quick-connect info');
   }
@@ -526,13 +528,21 @@ function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
         const shellOpts = {};
         if (cfg.x11) shellOpts.x11 = { single: false, screen: cfg.x11Screen || 0 };
         if (cfg.agentForward && cfg.agentSock) shellOpts.agentForward = true;
-        client.shell({ term: cfg.termType || 'xterm-256color', cols: 120, rows: 30 }, shellOpts, (err, stream) => {
+        client.shell({ term: cfg.termType || 'xterm-256color', cols: cfg.cols || 120, rows: cfg.rows || 30 }, shellOpts, (err, stream) => {
           if (err) { teardown(); reject(err); return; }
           connections.set(tabId, { client, stream, session: cfg.session, cfg, teardown });
+          let sawExit = false;
+          stream.on('exit', () => { sawExit = true; }); // remote reported exit-status: clean logout
           stream.on('close', () => {
             send(`ssh-closed-${tabId}`, { code: 'closed' });
             teardown();
             client.end();
+            if (sawExit) {
+              // User logged out (exit/logout): close the tab, don't reconnect.
+              connections.delete(tabId);
+              send(`ssh-exited-${tabId}`, {});
+              return;
+            }
             // auto-reconnect (Solar-PuTTY parity)
             const st = connections.get(tabId);
             if (st && cfg.session.autoReconnect !== false && attempt <= 3) {

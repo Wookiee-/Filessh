@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('filessh', {
   onData: (tabId, cb) => ipcRenderer.on(`ssh-data-${tabId}`, (e, b64) => cb(b64)),
   onStatus: (tabId, cb) => ipcRenderer.on(`ssh-status-${tabId}`, (e, s) => cb(s)),
   onClosed: (tabId, cb) => ipcRenderer.on(`ssh-closed-${tabId}`, (e, s) => cb(s)),
+  onExited: (tabId, cb) => ipcRenderer.on(`ssh-exited-${tabId}`, (e, s) => cb(s)),
   onVerify: (tabId, cb) => ipcRenderer.on(`ssh-verify-${tabId}`, (e, info) => cb(info)),
   respondVerify: (tabId, decision) => ipcRenderer.send('ssh:verify-response', { tabId, decision }),
   onMenu: (cb) => ipcRenderer.on('menu:action', (e, a) => cb(a)),
