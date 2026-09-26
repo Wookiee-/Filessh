@@ -1,8 +1,7 @@
 // electron-builder afterPack: prune dead weight from the bundled Electron.
-// Safe for Filessh (terminal-only UI, no media/WebGL/Vulkan, English-only):
+// Safe for Filessh (terminal-only UI, no WebGL/Vulkan, English-only):
 //   - locales: keep en-US only (~38MB saved)
 //   - Vulkan software rasterizer (xterm.js needs no Vulkan)
-//   - bundled ffmpeg (no <video>/<audio> anywhere in the app)
 // Kept deliberately: libEGL/libGLESv2 (GPU compositing), icudtl, sandbox.
 const fs = require('fs');
 const path = require('path');
@@ -30,5 +29,6 @@ exports.default = async (context) => {
   }
   rm('libvk_swiftshader.so');
   rm('vk_swiftshader_icd.json');
-  rm('libffmpeg.so');
+  // NOTE: libffmpeg.so must stay — Chromium fails to start without it,
+  // even though the app never plays media.
 };
