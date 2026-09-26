@@ -11,7 +11,6 @@ if (!GUI_THEMES[guiTheme]) guiTheme = 'light';
 function applyGuiTheme() {
   document.body.dataset.guitheme = guiTheme;
   localStorage.setItem('filessh-gui-theme', guiTheme);
-  if ($('gui-theme')) $('gui-theme').value = guiTheme;
   if ($('s-guitheme') && $('s-guitheme').options.length) $('s-guitheme').value = guiTheme;
 }
 function setGuiTheme(name) {
@@ -56,35 +55,68 @@ function applyTermPrefs() {
   term.focus();
 }
 
+// ---- dialogs: non-modal show() + shared dim backdrop ----
+// Native showModal() traps keyboard focus in Chromium's modal stack and has
+// caused fully-dead forms on some Linux desktops. show() displays the same
+// element without modality; the backdrop only dims (never traps focus).
+const MODALS = ['manager', 'editor', 'settings', 'verify', 'exportdlg'];
+function syncBackdrop() {
+  $('modal-backdrop').classList.toggle('hidden', !MODALS.some((id) => $(id).open));
+}
+function openModal(id) {
+  for (const other of MODALS) {
+    if (other !== id && $(other).open) $(other).close();
+  }
+  const d = $(id);
+  if (!d.open) d.show();
+  syncBackdrop();
+  d.focus();
+}
+for (const id of MODALS) $(id).addEventListener('close', syncBackdrop);
+
 async function refresh() {
   sessions = await window.filessh.listSessions();
   renderCards();
 }
 
 function renderCards() {
-  const q = $('search').value.toLowerCase();
+  const q = ($('search').value || '').toLowerCase();
   const box = $('cards');
   box.innerHTML = '';
+  let shown = 0;
   for (const s of sessions) {
     if (q && !`${s.name} ${s.host} ${s.username}`.toLowerCase().includes(q)) continue;
+    shown++;
     const div = document.createElement('div');
     div.className = 'card';
-    div.innerHTML = `<h4>${esc(s.name)}</h4>
-      <div class="meta">${esc(s.username)}@${esc(s.host)}:${esc(String(s.port || 22))}</div>
-      <div class="meta">SSH/SFTP ${s.hasPassword ? '· saved login' : ''} ${s.source === 'filezilla' ? '· from FileZilla' : ''}</div>
+    const authTag = s.keyfile ? '<span class="tag key">key</span>' : (s.hasPassword ? '<span class="tag">saved login</span>' : '<span class="tag">ask</span>');
+    const srcTag = s.source === 'filezilla' ? '<span class="src">FileZilla</span>' : '';
+    div.innerHTML = `<div class="card-top"><span class="dot"></span><h4 title="${esc(s.name)}">${esc(s.name)}</h4>${srcTag}</div>
+      <div class="addr" title="${esc(s.username)}@${esc(s.host)}:${esc(String(s.port || 22))}">${esc(s.username)}@${esc(s.host)}:${esc(String(s.port || 22))}</div>
+      <div class="tags"><span class="tag">SSH</span>${authTag}</div>
       <div class="row"></div>`;
+    div.ondblclick = () => openSession(s);
     const row = div.querySelector('.row');
-    const bConnect = btn('Connect', () => openSession(s));
-    const bEdit = btn('Edit', () => openEditor(s));
-    const bDel = btn('Delete', async () => { await window.filessh.deleteSession(s.id); refresh(); });
+    const bConnect = btn('Connect', (ev) => { ev.stopPropagation(); openSession(s); });
+    bConnect.className = 'primary';
+    const bEdit = btn('✎', (ev) => { ev.stopPropagation(); openEditor(s); });
+    bEdit.className = 'icon';
+    bEdit.title = 'Edit';
+    const bDel = btn('🗑', async (ev) => { ev.stopPropagation(); if (!confirm(`Delete ${s.name}?`)) return; await window.filessh.deleteSession(s.id); refresh(); });
+    bDel.className = 'icon';
+    bDel.title = 'Delete';
     row.append(bConnect, bEdit, bDel);
     box.appendChild(div);
   }
+  const counter = $('sess-count');
+  if (counter) counter.textContent = q ? `${shown} of ${sessions.length}` : `${sessions.length} ${sessions.length === 1 ? 'site' : 'sites'}`;
+  if (!box.children.length) box.innerHTML = '<div style="color:var(--muted);font-size:13px;padding:24px 4px">No sessions match. Use Site Manager or Import FileZilla to add some.</div>';
 }
 
 function btn(label, fn) {
   const b = document.createElement('button');
   b.textContent = label;
+  b.type = 'button';
   b.onclick = fn;
   return b;
 }
@@ -233,7 +265,7 @@ function openEditor(s) {
   $('e-keyfile').value = s?.keyfile || '';
   $('e-script').value = s?.startupScript || '';
   $('e-reconnect').checked = s?.autoReconnect !== false;
-  $('editor').showModal();
+  openModal('editor');
   $('e-save').onclick = async (ev) => {
     ev.preventDefault();
     await window.filessh.saveSession({
@@ -257,12 +289,21 @@ $('search').addEventListener('input', renderCards);
 $('q-connect').onclick = quickConnect;
 $('newtab').onclick = () => { activeTab = 'overview'; paintTabs(); $('search').focus(); };
 $('manage').onclick = openManager;
+$('settings-btn').onclick = openSettings;
 document.querySelector('#tabs .tab').onclick = () => { activeTab = 'overview'; paintTabs(); };
 $('import').onclick = async () => {
-  const r = await window.filessh.importPath();
+  const r = await window.filessh.importFile();
   if (!r) return;
-  alert(`Imported ${r.added}/${r.total} SSH sessions. Skipped ${r.skipped.length} FTP-only entries.`);
+  alert(`Imported ${r.added}/${r.total} sessions.`);
   refresh();
+};
+$('export').onclick = () => openModal('exportdlg');
+$('exp-cancel').onclick = () => $('exportdlg').close();
+$('exp-go').onclick = async () => {
+  const fmt = (document.querySelector('input[name="expfmt"]:checked') || {}).value || 'filezilla';
+  const r = await window.filessh.exportFile(fmt);
+  $('exportdlg').close();
+  if (r) alert(`Exported ${r.count} sessions to ${r.filePath}`);
 };
 
 // ---- host-key verify prompt (one global listener, routed per tab) ----
@@ -281,7 +322,7 @@ function showVerify(tabId, info) {
     : `No cached key for this host. Verify the fingerprint out-of-band, then accept. User + saved password will be sent automatically after you accept.`;
   $('v-keys').innerHTML = info.keys.map(k =>
     `<div><b>${esc(k.type)}</b><br><span style="font-family:monospace">${esc(k.sha256)}</span><br><span style="color:#666;font-size:12px">MD5:${esc(k.md5)}</span></div>`).join('<hr>');
-  if (!$('verify').open) $('verify').showModal();
+  if (!$('verify').open) openModal('verify');
   ensureVerifyChoice(tabId);
 }
 
@@ -304,10 +345,16 @@ let mgrSelected = null;
 
 async function openManager() {
   await refresh();
+  // Only one modal may be interactive: a stale open dialog (settings,
+  // editor, verify) would leave the manager visible but inert.
+  for (const id of ['settings', 'editor', 'verify']) {
+    const d = $(id);
+    if (d && d.open) d.close();
+  }
   mgrSelected = sessions[0]?.id || null;
   renderMgrTree();
   renderMgrForm();
-  if (!$('manager').open) $('manager').showModal();
+  if (!$('manager').open) openModal('manager');
 }
 
 function renderMgrTree() {
@@ -324,13 +371,54 @@ function renderMgrTree() {
     if (g) { const h = document.createElement('div'); h.className = 'mgr-folder'; h.textContent = g; tree.appendChild(h); }
     for (const s of groups[g]) {
       const b = document.createElement('button');
+      b.type = 'button';
       b.className = 'mgr-item' + (s.id === mgrSelected ? ' selected' : '');
+      b.title = 'Click to select · Double-click to rename';
       b.innerHTML = `${esc(s.name)}<br><span class="sub">${esc(s.username)}@${esc(s.host)}:${esc(String(s.port || 22))}</span>`;
-      b.onclick = () => { mgrSelected = s.id; renderMgrTree(); renderMgrForm(); };
-      b.ondblclick = () => { $('manager').close(); openSession(s); };
+      b.onclick = () => {
+        if (b.querySelector('.mgr-rename')) return; // editing — don't wipe the input
+        if (mgrSelected !== s.id) { mgrSelected = s.id; renderMgrTree(); renderMgrForm(); }
+      };
+      b.ondblclick = (ev) => { ev.preventDefault(); inlineRename(b, s); };
       tree.appendChild(b);
     }
   }
+}
+
+// Inline rename in the left tree: double-click a site, edit, Enter commits.
+function inlineRename(itemEl, s) {
+  if (itemEl.querySelector('.mgr-rename')) return;
+  mgrSelected = s.id;
+  const input = document.createElement('input');
+  input.value = s.name;
+  input.className = 'mgr-rename';
+  input.setAttribute('aria-label', 'Rename site');
+  input.spellcheck = false;
+  itemEl.innerHTML = '';
+  itemEl.appendChild(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return; done = true;
+    if (save) {
+      const v = input.value.trim();
+      if (v && v !== s.name) {
+        await window.filessh.saveSession({ id: s.id, name: v });
+        await refresh();
+        mgrSelected = s.id;
+      }
+    }
+    renderMgrTree(); renderMgrForm();
+  };
+  input.onclick = (e) => e.stopPropagation();
+  input.ondblclick = (e) => e.stopPropagation();
+  input.onkeydown = (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  };
+  input.onblur = () => finish(true);
 }
 
 function renderMgrForm() {
@@ -446,6 +534,10 @@ async function mgrCollect() {
 }
 
 $('m-search').addEventListener('input', renderMgrTree);
+// Enter in the Name field saves (renames left tree + cards immediately).
+$('m-name').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); $('m-save').click(); }
+});
 $('m-new').onclick = async () => {
   const rec = await window.filessh.saveSession({ name: 'New site', host: '', port: 22, username: 'root', authType: 'password', folder: '', autoReconnect: appSettings.defaultReconnect, keepaliveInterval: appSettings.ka, logSession: appSettings.autoLog });
   await refresh();
@@ -498,6 +590,8 @@ $('e-keybrowse').onclick = async () => {
   if (p) $('e-keyfile').value = p;
 };
 $('m-close').onclick = () => $('manager').close();
+$('m-back').onclick = () => $('manager').close();
+$('m-x').onclick = () => $('manager').close();
 
 // ---- terminal appearance + emulation controls ----
 (function initTermControls() {
@@ -530,18 +624,16 @@ $('m-close').onclick = () => $('manager').close();
   function paintBlink() { $('t-blink').style.opacity = termPrefs.blink ? '1' : '0.45'; }
 })();
 
-// ---- GUI theme pickers (overview + settings share state) ----
+// ---- GUI theme picker (lives in Settings; overview stays uncluttered) ----
 (function initGuiTheme() {
-  const quick = $('gui-theme'), inSettings = $('s-guitheme');
+  const inSettings = $('s-guitheme');
+  if (!inSettings) { applyGuiTheme(); return; }
   for (const [id, label] of Object.entries(GUI_THEMES)) {
-    const a = document.createElement('option');
-    a.value = id; a.textContent = label;
-    quick.appendChild(a);
     const b = document.createElement('option');
     b.value = id; b.textContent = label;
     inSettings.appendChild(b);
   }
-  quick.onchange = () => setGuiTheme(quick.value);
+  inSettings.onchange = () => setGuiTheme(inSettings.value);
   applyGuiTheme();
 })();
 
@@ -582,7 +674,7 @@ function openSettings() {
   $('s-ka').value = appSettings.ka;
   $('s-logdir').value = appSettings.logDir;
   $('s-autolog').checked = appSettings.autoLog;
-  if (!$('settings').open) $('settings').showModal();
+  if (!$('settings').open) openModal('settings');
 }
 
 document.querySelectorAll('.set-tab').forEach((tab) => {
@@ -617,9 +709,9 @@ $('s-save').onclick = (ev) => {
 
 // ---- File menu actions ----
 function doImport() {
-  window.filessh.importPath().then((r) => {
+  window.filessh.importFile().then((r) => {
     if (!r) return;
-    alert(`Imported ${r.added}/${r.total} SSH sessions. Skipped ${r.skipped.length} FTP-only entries.`);
+    alert(`Imported ${r.added}/${r.total} sessions.`);
     refresh();
   });
 }
@@ -645,9 +737,20 @@ function closeActiveTab() {
 
 window.filessh.onMenu((action) => {
   if (action === 'manager') openManager();
+  else if (action === 'manager-new') openManager().then(() => $('m-new').click());
   else if (action === 'import') doImport();
   else if (action === 'settings') openSettings();
   else if (action === 'close-tab') closeActiveTab();
+});
+
+// Native menu removed — in-app shortcuts replace accelerators.
+document.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return;
+  const k = (e.key || '').toLowerCase();
+  if (k === 'm') { e.preventDefault(); openManager(); }
+  else if (k === 'n') { e.preventDefault(); openManager().then(() => $('m-new').click()); }
+  else if (k === ',') { e.preventDefault(); openSettings(); }
+  else if (k === 'w' && activeTab !== 'overview') { e.preventDefault(); closeActiveTab(); }
 });
 
 refresh();

@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('filessh', {
   saveSession: (s) => ipcRenderer.invoke('sessions:save', s),
   deleteSession: (id) => ipcRenderer.invoke('sessions:delete', id),
   importPath: () => ipcRenderer.invoke('import:filezilla-path'),
+  importFile: () => ipcRenderer.invoke('import:file'),
+  exportFile: (format) => ipcRenderer.invoke('export:file', { format }),
   importXml: (xml) => ipcRenderer.invoke('import:filezilla-xml', xml),
   autodetect: () => ipcRenderer.invoke('import:filezilla-autodetect'),
   pickFile: (opts) => ipcRenderer.invoke('dialog:open-file', opts || {}),

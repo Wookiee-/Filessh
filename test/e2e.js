@@ -20,7 +20,7 @@ const handlers = {};
 const listeners = {};
 const win = null; // main.js owns the real window; stub BrowserWindow captures sends
 const electronStub = {
-  app: { getPath: (n) => (n === 'userData' ? path.join(HOME, '.config', 'Filessh') : HOME), whenReady: () => ({ then(fn) { fn(); } }), on: () => {} },
+  app: { getPath: (n) => (n === 'userData' ? path.join(HOME, '.config', 'Filessh') : HOME), whenReady: () => ({ then(fn) { fn(); } }), on: () => {}, commandLine: { appendSwitch: () => {} } },
   BrowserWindow: function () {
     this.loadFile = () => {};
     this.isDestroyed = () => false;

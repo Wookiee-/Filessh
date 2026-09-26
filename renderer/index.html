@@ -9,17 +9,23 @@
 <body>
 <div id="tabbar">
   <div id="tabs">
-    <button class="tab active" data-view="overview">Overview</button>
+    <button class="tab active" data-view="overview">Sessions</button>
   </div>
-  <button id="newtab" title="New quick-connect tab">+</button>
+  <button id="newtab" title="Back to sessions">+</button>
 </div>
 
 <div id="overview" class="view">
+  <div id="overview-head">
+    <div class="ov-title"><h2>Sessions</h2><span id="sess-count"></span></div>
+    <div class="ov-actions">
+      <button id="manage" class="primary">Site Manager</button>
+      <button id="import" title="Import .xml / .json / .csv">Import</button>
+      <button id="export" title="Export sessions">Export</button>
+      <button id="settings-btn" title="Settings">⚙</button>
+    </div>
+  </div>
   <div id="searchrow">
-    <input id="search" type="text" placeholder="Search sessions…">
-    <select id="gui-theme" title="Interface theme"></select>
-    <button id="manage">Site Manager</button>
-    <button id="import">Import FileZilla</button>
+    <input id="search" type="text" placeholder="Search sessions…" autocomplete="off" spellcheck="false">
   </div>
   <details id="quickwrap">
     <summary>Ad-hoc quick connect (unsaved)</summary>
@@ -62,7 +68,14 @@
   </div>
 </div>
 
-<dialog id="manager">
+<div id="modal-backdrop" class="hidden"></div>
+
+<dialog id="manager" tabindex="-1">
+  <div id="mgr-header">
+    <button id="m-back" title="Back to sessions" type="button">← Back</button>
+    <div id="mgr-title"><strong>Site Manager</strong><span>Organize and edit SSH sites</span></div>
+    <button id="m-x" title="Close" type="button" aria-label="Close">✕</button>
+  </div>
   <div id="mgr-layout">
     <div id="mgr-left">
       <div id="mgr-toolbar">
@@ -75,7 +88,7 @@
       <div id="mgr-tree"></div>
     </div>
     <div id="mgr-right">
-      <h3>Site Manager</h3>
+      <div id="mgr-form-scroll">
       <label>Name <input id="m-name"></label>
       <label>Folder <input id="m-group" placeholder="(top level)"></label>
       <label>Host <input id="m-host"></label>
@@ -137,17 +150,19 @@
           <span class="pickrow"><input id="m-logpath" placeholder="auto"><button id="m-logbrowse" type="button">Browse…</button></span>
         </label>
       </details>
-      <menu>
-        <button id="m-connect">Connect</button>
+      </div>
+      <menu id="mgr-footer">
+        <button id="m-close" type="button">Close</button>
+        <span style="flex:1"></span>
         <button id="m-save">Save</button>
-        <button id="m-close">Close</button>
+        <button id="m-connect">Connect</button>
       </menu>
       <div id="m-status"></div>
-    </div>
+      </div>
   </div>
 </dialog>
 
-<dialog id="editor">
+<dialog id="editor" tabindex="-1">
   <form method="dialog" id="editor-form">
     <h3>Session</h3>
     <input id="e-name" placeholder="Name" required>
@@ -166,7 +181,7 @@
   </form>
 </dialog>
 
-<dialog id="settings">
+<dialog id="settings" tabindex="-1">
   <form method="dialog" id="settings-form">
     <h3>Settings</h3>
     <div class="set-tabs" role="tablist">
@@ -203,7 +218,7 @@
   </form>
 </dialog>
 
-<dialog id="verify">
+<dialog id="verify" tabindex="-1">
   <h3 id="v-title">Unknown host key</h3>
   <p id="v-text"></p>
   <div id="v-keys"></div>
@@ -211,6 +226,18 @@
     <button id="v-save">Accept &amp; Save</button>
     <button id="v-once">Accept once</button>
     <button id="v-reject">Reject</button>
+  </menu>
+</dialog>
+
+<dialog id="exportdlg" tabindex="-1">
+  <h3>Export sessions</h3>
+  <label class="check"><input type="radio" name="expfmt" value="filezilla" checked> FileZilla sitemanager.xml</label>
+  <label class="check"><input type="radio" name="expfmt" value="json"> JSON backup (encrypted secrets kept)</label>
+  <label class="check"><input type="radio" name="expfmt" value="csv"> CSV (name,host,port,user,password,keyfile)</label>
+  <p class="hint">XML and CSV contain decodable passwords — keep the file private.</p>
+  <menu>
+    <button id="exp-cancel" type="button">Cancel</button>
+    <button id="exp-go" type="button">Export…</button>
   </menu>
 </dialog>
 

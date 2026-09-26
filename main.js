@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, safeStorage, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, safeStorage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -9,6 +9,12 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const { Client } = require('ssh2');
 const { parseFileZillaXml, toFilesshSession } = require('./lib/filezilla');
+const { toFileZillaXml, toCsv, parseCsv } = require('./lib/formats');
+
+// Don't probe KWallet/GNOME keyring on Linux (noisy failures when the user
+// has no wallet daemon). 'basic' keeps safeStorage functional with a local
+// key instead. Must be set before app startup.
+app.commandLine.appendSwitch('password-store', 'basic');
 
 let win;
 const connections = new Map(); // tabId -> { client, stream, session, autoReconnect }
@@ -79,12 +85,24 @@ function aesDecrypt(enc) {
   return decipher.update(Buffer.from(parts[3], 'base64')) + decipher.final('utf8');
 }
 
+function useSafeStorage() {
+  // Local AES-256-GCM only (0600 key file) by default, so Chromium never
+  // touches KWallet/GNOME keyring. Set FILESSH_USE_SAFESTORAGE=1 to opt back
+  // into OS-keyring storage.
+  if (process.env.FILESSH_USE_SAFESTORAGE !== '1') return false;
+  try {
+    return safeStorage.isEncryptionAvailable();
+  } catch {
+    return false;
+  }
+}
+
 function decryptPw(enc) {
   if (!enc) return '';
   try {
     if (String(enc).startsWith('plain:')) return String(enc).slice(6);
     if (String(enc).startsWith('aes:')) return aesDecrypt(enc);
-    if (safeStorage.isEncryptionAvailable()) {
+    if (useSafeStorage()) {
       return safeStorage.decryptString(Buffer.from(enc, 'base64'));
     }
     return Buffer.from(enc, 'base64').toString('utf-8');
@@ -96,7 +114,7 @@ function decryptPw(enc) {
 function encryptPw(plain) {
   if (!plain) return '';
   try {
-    if (safeStorage.isEncryptionAvailable()) {
+    if (useSafeStorage()) {
       return safeStorage.encryptString(String(plain)).toString('base64');
     }
   } catch { /* fall through */ }
@@ -108,6 +126,7 @@ function createWindow() {
     width: 1280,
     height: 800,
     backgroundColor: '#1e1e1e',
+    autoHideMenuBar: true,
     icon: path.join(__dirname, 'assets', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -115,20 +134,9 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  if (typeof win.setMenuBarVisibility === 'function') win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { label: 'File', submenu: [
-      { label: 'Site Manager', accelerator: 'Ctrl+M', click: () => win.webContents.send('menu:action', 'manager') },
-      { label: 'Import FileZilla…', click: () => win.webContents.send('menu:action', 'import') },
-      { type: 'separator' },
-      { label: 'Settings…', accelerator: 'Ctrl+,', click: () => win.webContents.send('menu:action', 'settings') },
-      { type: 'separator' },
-      { label: 'Quit', accelerator: 'Ctrl+Q', click: () => app.quit() },
-    ]},
-    { label: 'Session', submenu: [
-      { label: 'Close Tab', accelerator: 'Ctrl+W', click: () => win.webContents.send('menu:action', 'close-tab') },
-    ]},
-  ]));
+  if (process.argv.includes('--dev')) win.webContents.openDevTools({ mode: 'detach' });
 }
 
 app.whenReady().then(createWindow);
@@ -172,6 +180,114 @@ ipcMain.handle('import:filezilla-path', async () => {
 });
 
 ipcMain.handle('import:filezilla-xml', (e, xml) => importXml(xml));
+
+// ---- multi-format import/export (xml/json/csv, routed by extension) ----
+ipcMain.handle('import:file', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Import sessions',
+    filters: [
+      { name: 'Session files', extensions: ['xml', 'json', 'csv'] },
+      { name: 'All files', extensions: ['*'] },
+    ],
+    properties: ['openFile'],
+  });
+  if (canceled || !filePaths[0]) return null;
+  const fp = filePaths[0];
+  const text = fs.readFileSync(fp, 'utf-8');
+  const ext = path.extname(fp).toLowerCase();
+  if (ext === '.json') return importJson(text);
+  if (ext === '.csv') return importCsv(text);
+  return importXml(text); // .xml and anything else: FileZilla sniff
+});
+
+function importJson(text) {
+  const arr = JSON.parse(text);
+  if (!Array.isArray(arr)) throw new Error('JSON must be an array of sessions');
+  const store = loadStore();
+  const ids = new Set(store.map((s) => s.id));
+  const keys = new Set(store.map((s) => `${s.username}@${s.host}:${s.port}`));
+  let added = 0;
+  for (const r of arr) {
+    if (!r || !r.host) continue;
+    if (r.id && ids.has(r.id)) continue;
+    const key = `${r.username || ''}@${r.host}:${r.port || 22}`;
+    if (keys.has(key)) continue;
+    const rec = { ...r, id: r.id || `s-${Date.now().toString(36)}-${added}` };
+    delete rec.password; // never persist plaintext
+    store.push(rec);
+    ids.add(rec.id);
+    keys.add(key);
+    added++;
+  }
+  saveStore(store);
+  return { added, total: arr.length, skipped: [] };
+}
+
+function importCsv(text) {
+  const rows = parseCsv(text);
+  const store = loadStore();
+  const keys = new Set(store.map((s) => `${s.username}@${s.host}:${s.port}`));
+  let added = 0;
+  for (const r of rows) {
+    if (!r.host) continue;
+    const key = `${r.username || ''}@${r.host}:${Number(r.port) || 22}`;
+    if (keys.has(key)) continue;
+    const rec = {
+      id: `s-${Date.now().toString(36)}-${added}`,
+      name: r.name || r.host,
+      host: r.host,
+      port: Number(r.port) || 22,
+      username: r.username || 'root',
+      authType: r.keyfile ? 'key' : 'password',
+      keyfile: r.keyfile || '',
+      passwordEnc: r.password ? encryptPw(r.password) : '',
+      startupScript: '',
+      autoReconnect: true,
+      source: 'csv',
+      createdAt: new Date().toISOString(),
+    };
+    store.push(rec);
+    keys.add(key);
+    added++;
+  }
+  saveStore(store);
+  return { added, total: rows.length, skipped: [] };
+}
+
+ipcMain.handle('export:file', async (e, { format }) => {
+  const defs = {
+    filezilla: ['filessh-sitemanager.xml', 'FileZilla XML', 'xml'],
+    json: ['filessh-sessions.json', 'JSON backup', 'json'],
+    csv: ['filessh-sessions.csv', 'CSV', 'csv'],
+  };
+  const [defName, label, ext] = defs[format] || defs.filezilla;
+  const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    title: `Export sessions (${label})`,
+    defaultPath: defName,
+    filters: [{ name: label, extensions: [ext] }],
+  });
+  if (canceled || !filePath) return null;
+  const store = loadStore();
+  let text;
+  if (format === 'json') {
+    text = JSON.stringify(store.map((s) => {
+      const { password, ...rest } = s; // never write plaintext
+      return rest;
+    }), null, 2);
+  } else if (format === 'csv') {
+    text = toCsv(store.map((s) => ({
+      name: s.name, host: s.host, port: s.port || 22,
+      username: s.username, password: decryptPw(s.passwordEnc), keyfile: s.keyfile || '',
+    })));
+  } else {
+    text = toFileZillaXml(store.map((s) => ({
+      name: s.name, host: s.host, port: s.port || 22,
+      username: s.username, password: decryptPw(s.passwordEnc), keyfile: s.keyfile || '',
+    })));
+  }
+  fs.writeFileSync(filePath, text);
+  return { filePath, count: store.length };
+});
 
 ipcMain.handle('import:filezilla-autodetect', () => {
   const candidates = [
