@@ -50,12 +50,22 @@ App Settings (File → Settings):
 - `~/.filezilla/sitemanager.xml`
 - custom file via Browse button
 
-## Run
+## Run (dev)
 
 ```bash
 npm install
 npm start
 ```
+
+## Release (AppImage)
+
+```bash
+npm run dist
+# -> dist/Filessh-0.1.0.AppImage (108 MB, portable, no install)
+```
+
+Attach the AppImage to a GitHub Release. It bundles its own desktop entry
+(`StartupWMClass=filessh`), so window managers associate it correctly.
 
 ## Import test
 
