@@ -15,16 +15,15 @@ const connections = new Map(); // tabId -> { client, stream, session, autoReconn
 
 // ---- debug trace (FILSESSH_DEBUG=1): JSON lines of shell/data events ----
 const DEBUG = process.env.FILSESSH_DEBUG === '1';
-let debugStream = null;
+let debugPath = null;
 function dbg(obj) {
   if (!DEBUG) return;
   try {
-    if (!debugStream) {
-      const p = path.join(os.homedir(), '.config', 'filessh', `debug-${Date.now()}.log`);
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      debugStream = fs.createWriteStream(p);
+    if (!debugPath) {
+      debugPath = path.join(os.homedir(), '.config', 'filessh', `debug-${Date.now()}.log`);
+      fs.mkdirSync(path.dirname(debugPath), { recursive: true });
     }
-    debugStream.write(JSON.stringify({ t: new Date().toISOString(), ...obj }) + '\n');
+    fs.appendFileSync(debugPath, JSON.stringify({ t: new Date().toISOString(), ...obj }) + '\n');
   } catch {}
 }
 
@@ -282,33 +281,66 @@ function askVerify(tabId, payload) {
   });
 }
 
-// Returns Set of accepted SHA256 fingerprints, or throws { rejected: true } / Error.
+// Returns { known:Set<fp>, scanned:[keys] }, null (skip verification),
+// or throws { rejected: true }.
 async function verifyHostKey(tabId, host, port) {
   let scanned;
   try {
     scanned = await keyscan(host, port);
   } catch (err) {
-    if (err && (err.code === 'ENOENT' || /not found/i.test(String(err.message)))) {
-      if (win && !win.isDestroyed()) win.webContents.send(`ssh-status-${tabId}`, { status: 'warning: ssh-keyscan missing, skipping host-key check' });
-      return null; // no tools -> old behavior
+    if (win && !win.isDestroyed()) {
+      const missing = err && (err.code === 'ENOENT' || /not found/i.test(String(err.message)));
+      win.webContents.send(`ssh-status-${tabId}`, { status: missing ? 'warning: ssh-keyscan missing, skipping host-key check' : 'warning: host-key prescan failed, will verify at handshake' });
     }
-    return null; // host unreachable here; let connect surface the real error
+    scanned = [];
   }
-  if (!scanned.length) return null;
+  if (!scanned.length) {
+    // Prescan failed (host unreachable here, or no keys) — let the real
+    // connect surface errors, and verify strictly at handshake if possible.
+    const known = await knownFingerprints(host, port);
+    return known.size ? { known, matched: new Set(known), scanned: [] } : null;
+  }
   const known = await knownFingerprints(host, port);
-  const matched = scanned.filter(k => known.has(k.sha256));
-
   if (!known.size) {
+    // First contact: show every key, like OpenSSH does.
     const d = await askVerify(tabId, { mode: 'new', host, port, keys: scanned.map(k => ({ type: k.type, sha256: k.sha256, md5: k.md5 })) });
     if (d === 'save') saveKnownHost(scanned.map(k => k.line));
     if (d === 'reject' || d === undefined) throw { rejected: true };
-    return new Set(scanned.map(k => k.sha256));
+    const fps = new Set(scanned.map(k => k.sha256));
+    return { known: fps, matched: fps, scanned };
   }
-  if (matched.length) return new Set(matched.map(k => k.sha256));
-  const d = await askVerify(tabId, { mode: 'changed', host, port, keys: scanned.map(k => ({ type: k.type, sha256: k.sha256, md5: k.md5 })), known: [...known] });
-  if (d === 'save') saveKnownHost(scanned.map(k => k.line));
-  if (d === 'reject' || d === undefined) throw { rejected: true };
-  return new Set(scanned.map(k => k.sha256));
+  const matched = new Set(scanned.filter(k => known.has(k.sha256)).map(k => k.sha256));
+  return { known, matched, scanned };
+}
+
+function parseKeyType(buf) {
+  try {
+    const len = buf.readUInt32BE(0);
+    if (len > 0 && len < 64) return buf.slice(4, 4 + len).toString('ascii');
+  } catch {}
+  return 'ssh-unknown';
+}
+
+// Strict handshake verifier: known keys pass silently; an unknown presented
+// key prompts (changed-key warning) instead of failing cryptically.
+//
+// Contract: deliver EXACTLY ONE verdict — either return a boolean (the
+// wrapper forwards it) or call verify() later and return undefined.
+// Doing both re-runs handshake completion and emits 'ready' twice,
+// opening a duplicate shell (double prompt).
+function makeHostVerifier(tabId, host, port, accepted) {
+  return (key, verify) => {
+    const buf = Buffer.isBuffer(key) ? key : Buffer.from(String(key), 'hex');
+    const fp = sha256fp(buf);
+    if (accepted.matched.has(fp)) return true;
+    const type = parseKeyType(buf);
+    const presented = { type, sha256: fp, md5: md5fp(buf), line: `${Number(port) === 22 ? host : `[${host}]:${port}`} ${type} ${buf.toString('base64')}` };
+    askVerify(tabId, { mode: 'changed', host, port, keys: [{ type, sha256: fp, md5: presented.md5 }], known: [...accepted.known] }).then((d) => {
+      if (d === 'save') saveKnownHost([presented.line]);
+      verify(d === 'save' || d === 'once');
+    });
+    return undefined; // async verdict
+  };
 }
 
 // ---- SSH connect ----
@@ -532,6 +564,7 @@ function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
       const client = new Client();
       const send = (ch, data) => { if (win && !win.isDestroyed()) win.webContents.send(ch, data); };
       let fwd = null;
+      dbg({ ev: 'client-created', tabId, attempt });
 
       const teardown = () => {
         if (fwd) { try { fwd.cleanup(); } catch {} fwd = null; }
@@ -540,10 +573,12 @@ function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
       };
 
       client.on('ready', () => {
+        dbg({ ev: 'client-ready', tabId, attempt });
         fwd = setupForwards(tabId, client, cfg.forwards, send);
         const shellOpts = {};
         if (cfg.x11) shellOpts.x11 = { single: false, screen: cfg.x11Screen || 0 };
         if (cfg.agentForward && cfg.agentSock) shellOpts.agentForward = true;
+        dbg({ ev: 'shell-request', tabId, attempt });
         client.shell({ term: cfg.termType || 'xterm-256color', cols: cfg.cols || 120, rows: cfg.rows || 30 }, shellOpts, (err, stream) => {
           if (err) { teardown(); reject(err); return; }
           dbg({ ev: 'shell-open', tabId, attempt });
@@ -583,30 +618,6 @@ function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
         });
       });
 
-    client.on('ready', () => {
-      client.shell({ term: cfg.termType || 'xterm-256color', cols: 120, rows: 30 }, (err, stream) => {
-        if (err) { reject(err); return; }
-        connections.set(tabId, { client, stream, session: cfg.session, cfg });
-        stream.on('close', () => {
-          send(`ssh-closed-${tabId}`, { code: 'closed' });
-          client.end();
-          // auto-reconnect (Solar-PuTTY parity)
-          const st = connections.get(tabId);
-          if (st && cfg.session.autoReconnect !== false && attempt <= 3) {
-            setTimeout(() => {
-              send(`ssh-status-${tabId}`, { status: `reconnecting (attempt ${attempt})…` });
-              openShell(tabId, cfg, attempt + 1, accepted).catch(() => {});
-            }, 2000 * attempt);
-          }
-        });
-        stream.on('data', (d) => send(`ssh-data-${tabId}`, d.toString('base64')));
-        // post-connection script (Solar-PuTTY parity)
-        const script = (cfg.session.startupScript || '').split('\n').map(l => l.trim()).filter(Boolean);
-        for (const line of script) stream.write(line + '\n');
-        send(`ssh-status-${tabId}`, { status: 'connected' });
-        resolve(true);
-      });
-    });
     client.on('error', (err) => {
       if (win && !win.isDestroyed()) win.webContents.send(`ssh-status-${tabId}`, { status: 'error: ' + err.message });
       if (attempt === 1) { teardown(); reject(err); }
@@ -627,8 +638,8 @@ function openShell(tabId, cfg, attempt = 1, accepted = undefined) {
       keepaliveInterval: cfg.keepaliveInterval || 0,
       keepaliveCountMax: cfg.keepaliveCountMax || 3,
       algorithms: cfg.algorithms,
-      // Strict: handshake key must be one the user approved (or was already known).
-      hostVerifier: accepted ? ((key) => accepted.has(sha256fp(Buffer.isBuffer(key) ? key : Buffer.from(key, 'hex')))) : undefined,
+      // Strict: known handshake keys pass silently; unknown ones prompt.
+      hostVerifier: accepted ? makeHostVerifier(tabId, cfg.host, cfg.port, accepted) : undefined,
     });
     });
   };
@@ -660,7 +671,7 @@ ipcMain.handle('ssh:disconnect', (e, { tabId }) => {
 
 // Exported only when required (tests); no-op when run as the Electron entry.
 if (typeof module !== 'undefined' && module.parent) {
-  module.exports = { startSocksServer, setupForwards, sha256fp, md5fp, splitList, sessionAlgorithms, sessionToCfg, resolveLogPath, knownFingerprints, saveKnownHost, knownHostsPath };
+  module.exports = { startSocksServer, setupForwards, sha256fp, md5fp, splitList, sessionAlgorithms, sessionToCfg, resolveLogPath, knownFingerprints, saveKnownHost, knownHostsPath, parseKeyType, makeHostVerifier };
 }
 
 // ---- graphical SFTP (Solar-PuTTY parity) ----
