@@ -1,0 +1,49 @@
+:root { --bg: #f4f4f4; --card: #fff; --accent: #e8641b; --dark: #1e1e1e; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: sans-serif; background: var(--bg); }
+#tabbar { display: flex; background: var(--dark); color: #fff; padding: 6px; gap: 6px; align-items: center; }
+#tabs { display: flex; gap: 4px; flex: 1; overflow-x: auto; }
+.tab { background: #333; color: #fff; border: 0; padding: 6px 14px; cursor: pointer; border-top: 2px solid transparent; }
+.tab.active { background: #fff; color: #000; border-top-color: var(--accent); }
+#newtab { background: #333; color: #fff; border: 0; font-size: 18px; padding: 2px 12px; cursor: pointer; }
+.view.hidden { display: none; }
+#searchrow, #quickrow { display: flex; gap: 8px; padding: 10px 12px 0; }
+#search, #q-host, #q-user, #q-port, #e-name, #e-host, #e-port, #e-user, #e-password, #e-keyfile, #sftp-path {
+  padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+}
+#search { flex: 1; }
+button { padding: 8px 14px; border-radius: 4px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+#cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; padding: 12px; }
+.card { background: var(--card); border: 1px solid #ddd; border-radius: 6px; padding: 12px; }
+.card h4 { margin: 0 0 4px; }
+.card .meta { color: #555; font-size: 13px; margin: 2px 0; }
+.card .row { display: flex; gap: 6px; margin-top: 8px; }
+.card button { font-size: 12px; padding: 5px 10px; }
+#termview { height: calc(100vh - 42px); display: flex; flex-direction: column; background: #000; }
+#termview.hidden { display: none; }
+#termheader { display: flex; gap: 8px; align-items: center; background: var(--dark); color: #fff; padding: 6px 10px; }
+#termstatus { flex: 1; font-size: 13px; color: #8f8; }
+#termwrap { display: flex; flex: 1; min-height: 0; }
+#terminal { flex: 1; min-width: 0; }
+#sftp { width: 300px; background: #fff; border-left: 1px solid #ccc; display: flex; flex-direction: column; }
+#sftp.hidden { display: none; }
+#sftp-bar { display: flex; gap: 4px; padding: 6px; }
+#sftp-list { overflow-y: auto; font-size: 13px; padding: 6px; }
+#editor { border: 1px solid #ccc; border-radius: 8px; padding: 16px; }
+#editor-form { display: flex; flex-direction: column; gap: 8px; min-width: 320px; }
+#e-script { min-height: 60px; }
+#manager { border: 1px solid #ccc; border-radius: 8px; padding: 0; width: min(880px, 95vw); }
+#mgr-layout { display: flex; min-height: 480px; }
+#mgr-left { width: 320px; border-right: 1px solid #ddd; display: flex; flex-direction: column; padding: 10px; gap: 8px; background: #fafafa; }
+#mgr-toolbar { display: flex; gap: 4px; flex-wrap: wrap; }
+#mgr-toolbar button { font-size: 12px; padding: 5px 8px; }
+#mgr-tree { overflow-y: auto; flex: 1; border: 1px solid #ddd; background: #fff; border-radius: 4px; padding: 4px; }
+.mgr-folder { font-weight: bold; margin-top: 6px; color: #555; font-size: 13px; }
+.mgr-item { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+.mgr-item.selected, .mgr-item:hover { background: #e8f0fe; }
+.mgr-item .sub { color: #888; font-size: 11px; }
+#mgr-right { flex: 1; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+#mgr-right label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+#mgr-right input, #mgr-right select, #mgr-right textarea { padding: 7px; border: 1px solid #ccc; border-radius: 4px; }
+#m-status { min-height: 18px; font-size: 13px; color: #a00; }

@@ -1,0 +1,19 @@
+{
+  "name": "filessh",
+  "version": "0.1.0",
+  "description": "Solar-PuTTY style GUI SSH client for Linux with FileZilla SFTP import",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "@xterm/xterm": "^5.5.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "ssh2": "^1.16.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}

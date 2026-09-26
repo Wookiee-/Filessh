@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Filessh</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
+</head>
+<body>
+<div id="tabbar">
+  <div id="tabs">
+    <button class="tab active" data-view="overview">Overview</button>
+  </div>
+  <button id="newtab" title="New quick-connect tab">+</button>
+</div>
+
+<div id="overview" class="view">
+  <div id="searchrow">
+    <input id="search" type="text" placeholder="Search or enter a session address…  (user@host:port)">
+    <button id="manage">Site Manager</button>
+    <button id="create">Create new session</button>
+    <button id="import">Import FileZilla</button>
+  </div>
+  <div id="quickrow">
+    <input id="q-host" placeholder="host">
+    <input id="q-user" placeholder="user">
+    <input id="q-pass" type="password" placeholder="password (optional)">
+    <input id="q-port" placeholder="22" size="4">
+    <button id="q-connect">Quick connect</button>
+  </div>
+  <div id="cards"></div>
+</div>
+
+<div id="termview" class="view hidden">
+  <div id="termheader">
+    <span id="termstatus">disconnected</span>
+    <button id="sftp-toggle">SFTP</button>
+    <button id="term-close">Close</button>
+  </div>
+  <div id="termwrap">
+    <div id="terminal"></div>
+    <div id="sftp" class="hidden">
+      <div id="sftp-bar">
+        <input id="sftp-path" value=".">
+        <button id="sftp-go">List</button>
+      </div>
+      <div id="sftp-list"></div>
+    </div>
+  </div>
+</div>
+
+<dialog id="manager">
+  <div id="mgr-layout">
+    <div id="mgr-left">
+      <div id="mgr-toolbar">
+        <button id="m-new" title="New site">+ Site</button>
+        <button id="m-folder" title="New folder">+ Folder</button>
+        <button id="m-dup" title="Duplicate selected">Duplicate</button>
+        <button id="m-del" title="Delete selected">Delete</button>
+      </div>
+      <input id="m-search" placeholder="Filter sites…">
+      <div id="mgr-tree"></div>
+    </div>
+    <div id="mgr-right">
+      <h3>Site Manager</h3>
+      <label>Name <input id="m-name"></label>
+      <label>Folder <input id="m-group" placeholder="(top level)"></label>
+      <label>Host <input id="m-host"></label>
+      <label>Port <input id="m-port" value="22"></label>
+      <label>Protocol
+        <select id="m-proto">
+          <option value="sftp">SFTP / SSH</option>
+          <option value="ftp" disabled>FTP (imported, not connectable)</option>
+        </select>
+      </label>
+      <label>Logon type
+        <select id="m-logon">
+          <option value="1">Normal (saved password)</option>
+          <option value="2">Ask for password</option>
+          <option value="4">Key file</option>
+          <option value="0">Anonymous</option>
+        </select>
+      </label>
+      <label>User <input id="m-user"></label>
+      <label>Password <input id="m-password" type="password" placeholder="(unchanged)"></label>
+      <label>Key file <input id="m-keyfile" placeholder="/path/to/key"></label>
+      <label>Post-connect script <textarea id="m-script" placeholder="one command per line"></textarea></label>
+      <label><input type="checkbox" id="m-reconnect" checked> Auto-reconnect</label>
+      <menu>
+        <button id="m-connect">Connect</button>
+        <button id="m-save">Save</button>
+        <button id="m-close">Close</button>
+      </menu>
+      <div id="m-status"></div>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="editor">
+  <form method="dialog" id="editor-form">
+    <h3>Session</h3>
+    <input id="e-name" placeholder="Name" required>
+    <input id="e-host" placeholder="Host" required>
+    <input id="e-port" placeholder="Port" value="22">
+    <input id="e-user" placeholder="Username" required>
+    <select id="e-auth"><option value="password">Password</option><option value="key">Private key</option></select>
+    <input id="e-password" type="password" placeholder="Password (saved encrypted)">
+    <input id="e-keyfile" placeholder="Key file path (optional)">
+    <textarea id="e-script" placeholder="Post-connection script (one command per line)"></textarea>
+    <label><input type="checkbox" id="e-reconnect" checked> Auto-reconnect</label>
+    <menu>
+      <button value="cancel">Cancel</button>
+      <button id="e-save" value="default">Save</button>
+    </menu>
+  </form>
+</dialog>
+
+<dialog id="verify">
+  <h3 id="v-title">Unknown host key</h3>
+  <p id="v-text"></p>
+  <div id="v-keys"></div>
+  <menu>
+    <button id="v-save">Accept &amp; Save</button>
+    <button id="v-once">Accept once</button>
+    <button id="v-reject">Reject</button>
+  </menu>
+</dialog>
+
+<script src="../node_modules/@xterm/xterm/lib/xterm.js"></script>
+<script src="../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+<script src="renderer.js"></script>
+</body>
+</html>
