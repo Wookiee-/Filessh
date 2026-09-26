@@ -169,19 +169,33 @@
 <dialog id="settings">
   <form method="dialog" id="settings-form">
     <h3>Settings</h3>
-    <label>Interface theme <select id="s-guitheme"></select></label>
-    <label>Default terminal theme <select id="s-theme"></select></label>
-    <label>Default emulation (TERM) <select id="s-term"></select></label>
-    <label>Default font size <input id="s-fontsize" type="number" min="9" max="24"></label>
-    <label><input type="checkbox" id="s-confirm"> Confirm before closing a connected tab</label>
-    <label><input type="checkbox" id="s-reconnect"> New sites default to auto-reconnect</label>
-    <label>SFTP initial path <input id="s-sftppath" placeholder="."></label>
-    <label>Scrollback rows <input id="s-scrollback" type="number" min="100" max="50000" step="100"></label>
-    <label><input type="checkbox" id="s-copyselect"> Copy on select</label>
-    <label><input type="checkbox" id="s-pasteclick"> Right-click pastes</label>
-    <label>Default keep-alive (s, 0 = off) <input id="s-ka" type="number" min="0" max="3600"></label>
-    <label>Session log directory <input id="s-logdir" placeholder="~/.config/filessh/logs"></label>
-    <label><input type="checkbox" id="s-autolog"> Log all sessions by default</label>
+    <div class="set-tabs" role="tablist">
+      <button type="button" class="set-tab active" data-pane="appearance">Appearance</button>
+      <button type="button" class="set-tab" data-pane="terminal">Terminal</button>
+      <button type="button" class="set-tab" data-pane="connection">Connection</button>
+      <button type="button" class="set-tab" data-pane="files">Files &amp; Logging</button>
+    </div>
+    <div class="set-pane active" data-pane="appearance">
+      <label>Interface theme <select id="s-guitheme"></select></label>
+      <label>Default terminal theme <select id="s-theme"></select></label>
+      <label>Default emulation (TERM) <select id="s-term"></select></label>
+      <label>Default font size <input id="s-fontsize" type="number" min="9" max="24"></label>
+    </div>
+    <div class="set-pane" data-pane="terminal">
+      <label>Scrollback rows <input id="s-scrollback" type="number" min="100" max="50000" step="100"></label>
+      <label class="check"><input type="checkbox" id="s-copyselect"> Copy on select</label>
+      <label class="check"><input type="checkbox" id="s-pasteclick"> Right-click pastes</label>
+      <label class="check"><input type="checkbox" id="s-confirm"> Confirm before closing a connected tab</label>
+    </div>
+    <div class="set-pane" data-pane="connection">
+      <label><input type="checkbox" id="s-reconnect"> New sites default to auto-reconnect</label>
+      <label>Default keep-alive (s, 0 = off) <input id="s-ka" type="number" min="0" max="3600"></label>
+    </div>
+    <div class="set-pane" data-pane="files">
+      <label>SFTP initial path <input id="s-sftppath" placeholder="."></label>
+      <label>Session log directory <input id="s-logdir" placeholder="~/.config/filessh/logs"></label>
+      <label class="check"><input type="checkbox" id="s-autolog"> Log all sessions by default</label>
+    </div>
     <menu>
       <button value="cancel">Cancel</button>
       <button id="s-save" value="default">Save</button>

@@ -165,14 +165,22 @@ dialog::backdrop { background: rgba(10, 14, 24, .5); backdrop-filter: blur(2px);
 dialog h3 { margin-top: 0; }
 dialog menu { display: flex; gap: 8px; justify-content: flex-end; padding: 0; margin: 14px 0 0; }
 #editor-form { display: flex; flex-direction: column; gap: 9px; min-width: min(360px, 80vw); }
-#settings-form { display: flex; flex-direction: column; gap: 9px; min-width: min(360px, 80vw); }
-#settings-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
 #e-script { min-height: 60px; }
 #verify { max-width: 520px; }
 #verify code, #v-keys { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12.5px; }
 #v-keys { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
-#manager { border-radius: 12px; padding: 0; width: min(920px, 95vw); }
-#mgr-layout { display: flex; min-height: 500px; }
+#settings { width: min(780px, 94vw); }
+#manager { border-radius: 12px; padding: 0; width: min(1100px, 96vw); }
+#settings-form { display: flex; flex-direction: column; gap: 12px; min-width: min(700px, 86vw); }
+#settings-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+#settings-form label.check { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
+.set-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--line); padding-bottom: 10px; flex-wrap: wrap; }
+.set-tab { border: 1px solid transparent; background: none; font-weight: 600; color: var(--muted); }
+.set-tab:hover { color: var(--accent); border-color: transparent; }
+.set-tab.active { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.set-pane { display: none; flex-direction: column; gap: 12px; min-height: 340px; padding: 6px 2px; }
+.set-pane.active { display: flex; }
+#mgr-layout { display: flex; min-height: 580px; }
 #mgr-left { width: 320px; border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 12px; gap: 8px; background: var(--bg-soft); border-radius: 12px 0 0 12px; }
 #mgr-toolbar { display: flex; gap: 5px; flex-wrap: wrap; }
 #mgr-toolbar button { font-size: 12px; padding: 6px 9px; }

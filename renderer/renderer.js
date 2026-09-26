@@ -585,6 +585,13 @@ function openSettings() {
   if (!$('settings').open) $('settings').showModal();
 }
 
+document.querySelectorAll('.set-tab').forEach((tab) => {
+  tab.onclick = () => {
+    document.querySelectorAll('.set-tab').forEach((t) => t.classList.toggle('active', t === tab));
+    document.querySelectorAll('.set-pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === tab.dataset.pane));
+  };
+});
+
 $('s-save').onclick = (ev) => {
   ev.preventDefault();
   setGuiTheme($('s-guitheme').value);
