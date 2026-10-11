@@ -69,13 +69,21 @@ async fn ask_verify(
     tab: &str,
     payload: Value,
 ) -> String {
+    // Loud status: if the dialog ever fails to appear, the frozen status
+    // still tells us exactly where it wedged (no log needed).
+    emit_status(app, tab, "waiting for host-key approval…");
+    phasedbg!(tab, "verify prompt shown, awaiting user");
     let _ = app.emit(&format!("ssh-verify-{tab}"), payload);
     let (tx, rx) = tokio::sync::oneshot::channel::<String>();
     state.verify.lock().unwrap().insert(tab.to_string(), tx);
-    match tokio::time::timeout(Duration::from_secs(120), rx).await {
-        Ok(Ok(d)) => d,
+    match tokio::time::timeout(Duration::from_secs(60), rx).await {
+        Ok(Ok(d)) => {
+            phasedbg!(tab, "verify decision: {d}");
+            d
+        }
         _ => {
             state.verify.lock().unwrap().remove(tab);
+            phasedbg!(tab, "verify timed out, treating as reject");
             "reject".into()
         }
     }
@@ -301,6 +309,7 @@ fn verify_hostkey_blocking(app: &AppHandle, state: &AppState, tab: &str, host: &
 }
 
 async fn verify_hostkey_async(app: &AppHandle, state: &AppState, tab: &str, host: &str, port: u16) -> anyhow::Result<Option<(HashSet<String>, Vec<ScannedKey>)>> {
+    emit_status(app, tab, "checking host key…");
     let scanned = match known_hosts::keyscan(host, port).await {
         Ok(k) => k,
         Err(_) => {
@@ -897,6 +906,7 @@ fn shell_once(
     // Auth runs through the same nonblocking driver (deadline-bounded).
     // The old helper-thread watchdog is gone: nb() cannot hang, so there is
     // nothing to outlive the attempt and wedge the shared session lock.
+    emit_status(app, tab, "authenticating…");
     auth_session(&sess, &cfg.username, &cfg.password, &cfg.keyfile, &cfg.key_passphrase, setup_dl)?;
     phasedbg!(tab, "authenticated");
     let mut channel = nb(setup_dl, "open channel", || sess.channel_session()).map_err(|f| f.anyhow("open channel"))?;
