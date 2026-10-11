@@ -12,6 +12,7 @@
     "test:e2e": "node test/e2e.js",
     "desktop:install": "sh scripts/install-desktop.sh",
     "flatpak:build": "flatpak-builder --user --install --force-clean --delete-build-dirs flatpak/build-dir flatpak/tech.wookiee.filessh.yml",
+    "flatpak:bundle": "flatpak build-bundle ~/.local/share/flatpak/repo Filessh-0.1.0.flatpak tech.wookiee.filessh master --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo",
     "flatpak:run": "flatpak run tech.wookiee.filessh",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",

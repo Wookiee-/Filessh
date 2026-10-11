@@ -82,6 +82,20 @@ After `Cargo.lock` changes, regenerate `flatpak/cargo-sources.json` with
 python3 flatpak-cargo-generator.py src-tauri/Cargo.lock -o flatpak/cargo-sources.json
 ```
 
+Publish the Flatpak on GitHub Releases (you have no releases yet):
+
+```bash
+npm run flatpak:bundle   # -> Filessh-0.1.0.flatpak (~3 MB; GNOME runtime comes from Flathub)
+gh release create v0.1.0 --title "Filessh 0.1.0" --notes "Tabbed SSH client (Tauri)."
+gh release upload v0.1.0 Filessh-0.1.0.flatpak
+```
+
+Users install it with:
+
+```bash
+flatpak install --user Filessh-0.1.0.flatpak
+```
+
 ## Tests
 
 ```bash
