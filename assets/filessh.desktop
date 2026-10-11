@@ -7,3 +7,6 @@ Terminal=false
 Type=Application
 Categories=Network;RemoteAccess;
 StartupWMClass=filessh
+# Hidden from menus (the Flatpak is the visible entry); present only so
+# dev windows (app-id / StartupWMClass `filessh`) resolve the right icon.
+NoDisplay=true
