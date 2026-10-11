@@ -25,6 +25,8 @@ modules:
       env:
         CARGO_HOME: /run/build/filessh/cargo
         CARGO_NET_OFFLINE: 'true'
+        # cap parallel rustc: full-width release builds OOM (exit 137)
+        CARGO_BUILD_JOBS: '4'
     build-commands:
       - cargo --offline fetch --manifest-path src-tauri/Cargo.toml
       - cargo --offline --frozen build --release --manifest-path src-tauri/Cargo.toml
