@@ -186,9 +186,11 @@ function showTerminal(tabId, label) {
   currentTabId = tabId;
   activeTab = tabId;
   paintTabs();
-  $('termstatus').textContent = 'connecting…';
-  if (term) { term.dispose(); }
-  term = new Terminal({
+  tabStats[tabId] = { bytes: 0, status: 'connecting…', writeErrors: 0, lastPaint: Date.now() };
+  paintTermStatus(tabId);
+  if (term) { try { term.dispose(); } catch {} }
+  try {
+    term = new Terminal({
     cursorBlink: termPrefs.blink,
     cursorStyle: termPrefs.cursor,
     fontSize: termPrefs.fontSize,
@@ -226,20 +228,61 @@ function showTerminal(tabId, label) {
     lastDims = { cols, rows };
     window.filessh.resize(tabId, cols, rows);
   });
+  } catch (err) {
+    term = null;
+    $('termstatus').textContent = 'terminal init failed: ' + ((err && err.message) || err);
+    $('termstatus').classList.add('error');
+    throw err; // stop wireTerminal/connect: no terminal, no session
+  }
+}
+
+// Per-tab receive stats, painted into the shared status bar so a blank
+// terminal self-reports whether data arrived at all (no console needed).
+const tabStats = {}; // tabId -> { bytes, status, writeErrors, lastPaint }
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+function paintTermStatus(tabId) {
+  if (tabId !== currentTabId) return;
+  const st = tabStats[tabId] || { bytes: 0, status: '', writeErrors: 0 };
+  const dims = (term && typeof term.cols === 'number') ? ` • ${term.cols}×${term.rows}` : '';
+  const flow = st.bytes > 0 ? ` • ${fmtBytes(st.bytes)} received` : ' • 0 B received';
+  const werr = st.writeErrors ? ` • terminal write failed ×${st.writeErrors}` : '';
+  $('termstatus').textContent = st.status + dims + flow + werr;
 }
 
 function wireTerminal(tabId, sessionId) {
   window.filessh.onData(tabId, (b64) => {
-    try { term.write(new Uint8Array(atob(b64).split('').map(c => c.charCodeAt(0)))); } catch {}
+    const st = (tabStats[tabId] = tabStats[tabId] || { bytes: 0, status: '', writeErrors: 0, lastPaint: 0 });
+    const wasZero = st.bytes === 0;
+    let n = 0;
+    try {
+      const bytes = new Uint8Array(atob(b64).split('').map(c => c.charCodeAt(0)));
+      n = bytes.length;
+      term.write(bytes);
+    } catch (err) { st.writeErrors = (st.writeErrors || 0) + 1; }
+    st.bytes += n;
+    const now = Date.now();
+    if (n > 0 && (wasZero || now - (st.lastPaint || 0) > 500)) { st.lastPaint = now; paintTermStatus(tabId); }
   });
   window.filessh.onStatus(tabId, (s) => {
-    $('termstatus').textContent = s.status;
+    const st = (tabStats[tabId] = tabStats[tabId] || { bytes: 0, status: '', writeErrors: 0, lastPaint: 0 });
+    st.status = s.status;
+    st.lastPaint = Date.now();
+    paintTermStatus(tabId);
     $('termstatus').classList.toggle('error', /^(error|host key rejected)/i.test(s.status));
     // A new shell prints its prompt on whatever line is current; mark
     // reconnects so prompts never concatenate on one line.
     if (/^reconnecting/i.test(s.status) && term) term.writeln('\r\n--- reconnecting ---');
   });
-  window.filessh.onClosed(tabId, () => { $('termstatus').textContent = 'disconnected'; });
+  window.filessh.onClosed(tabId, () => {
+    const st = (tabStats[tabId] = tabStats[tabId] || { bytes: 0, status: '', writeErrors: 0, lastPaint: 0 });
+    st.status = 'disconnected';
+    st.lastPaint = Date.now();
+    paintTermStatus(tabId);
+  });
   window.filessh.onExited(tabId, () => closeTabUI(tabId, false)); // clean logout closes the tab
   $('term-close').onclick = () => closeTabUI(tabId, true);
   $('sftp-toggle').onclick = () => $('sftp').classList.toggle('hidden');
