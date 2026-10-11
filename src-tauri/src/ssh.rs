@@ -696,6 +696,65 @@ struct JumpGuard {
 /// Open the target stream through a bastion host: a loopback relay port
 /// bridged to a direct-tcpip channel on the jump session, which lives in
 /// the relay thread for the duration of the connection.
+/// OpenSSH client host-key preference order.
+const OPENSSH_HOSTKEY_ORDER: [&str; 7] = [
+    "ssh-ed25519",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
+    "rsa-sha2-512",
+    "rsa-sha2-256",
+    "ssh-rsa",
+];
+
+/// Build the handshake host-key preference: already-cached types first (so
+/// the server presents a key known_hosts can verify silently — this is why
+/// the Electron client rarely prompts while libssh2's default order hits
+/// uncached ECDSA keys), then freshly-scanned types, then everything else
+/// libssh2 supports (so negotiation can never do worse than defaults).
+/// `supported=None` (algorithm list unavailable) passes names through;
+/// a rejected method_pref is ignored by the caller, restoring defaults.
+fn hostkey_pref(cached: &[String], scanned: &[ScannedKey], supported: Option<&[&str]>) -> String {
+    let mut out: Vec<String> = vec![];
+    let mut push = |t: &str| {
+        if !out.iter().any(|x| x == t) {
+            out.push(t.to_string());
+        }
+    };
+    for t in OPENSSH_HOSTKEY_ORDER {
+        if cached.iter().any(|c| c == t) {
+            push(t);
+        }
+    }
+    for t in OPENSSH_HOSTKEY_ORDER {
+        if scanned.iter().any(|s| s.key_type == t) {
+            push(t);
+        }
+    }
+    if let Some(sup) = supported {
+        for t in sup {
+            push(t);
+        }
+    }
+    out.into_iter()
+        .filter(|t| supported.map(|s| s.contains(&t.as_str())).unwrap_or(true))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn apply_hostkey_pref(sess: &ssh2::Session, tab: &str, host: &str, port: u16, scanned: &[ScannedKey]) {
+    let cached = known_hosts::cached_key_types(host, port);
+    let supported = sess.supported_algs(ssh2::MethodType::HostKey).ok();
+    let pref = hostkey_pref(&cached, scanned, supported.as_deref());
+    if pref.is_empty() {
+        return;
+    }
+    // A rejected list restores libssh2 defaults; never fail the connect for it.
+    if sess.method_pref(ssh2::MethodType::HostKey, &pref).is_ok() {
+        phasedbg!(tab, "hostkey pref: {pref}");
+    }
+}
+
 fn open_jump(
     app: &AppHandle,
     tab: &str,
@@ -863,6 +922,10 @@ fn shell_once(
     // Nonblocking from the start: every setup call below is EAGAIN-polled
     // with our own deadline, so no libssh2 wait can wedge the tab.
     sess.set_blocking(false);
+    // Prefer already-cached host-key types so the handshake presents a key
+    // known_hosts verifies silently (otherwise libssh2's default order hits
+    // uncached ECDSA keys and every connect false-trips the changed-key alarm).
+    apply_hostkey_pref(&sess, tab, &cfg.host, cfg.port, accepted.as_ref().map(|(_, s)| s.as_slice()).unwrap_or(&[]));
     let setup_dl = std::time::Instant::now() + Duration::from_secs(60);
     phasedbg!(tab, "handshake");
     nb(setup_dl, "handshake", || sess.handshake()).map_err(|f| f.anyhow("handshake"))?;
@@ -1294,5 +1357,116 @@ mod handshake_bisect_tests {
         assert!(variant("V1 plain", plain, 25), "control failed?!");
         assert!(variant("V2 +30s+tuner", with_big_timeout, 40));
         assert!(variant("V3 +api_timeout", with_api_timeout, 45));
+    }
+}
+
+#[cfg(test)]
+mod ctx_tests {
+    use super::*;
+    /// Exact app context: tokio runtime + child execs (prescan) FIRST, then
+    /// the nb handshake + auth exchange on WAN. Must complete, not hang.
+    #[test]
+    #[ignore]
+    fn prescan_then_handshake_wan() {
+        let (tx, rx) = stdmpsc::channel();
+        std::thread::spawn(move || {
+            let r = (|| -> anyhow::Result<String> {
+                // 1. prescan exactly like verify_hostkey_async (execs + runtime)
+                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+                let out = rt.block_on(async {
+                    tokio::time::timeout(
+                        Duration::from_secs(15),
+                        tokio::process::Command::new("ssh-keyscan")
+                            .args(["-p", "22", "-t", "rsa,ecdsa,ed25519", "74.91.114.239"])
+                            .output(),
+                    )
+                    .await
+                });
+                eprintln!("keyscan done: {}", out.is_ok());
+                drop(rt);
+                // 2. dial + nb handshake + wrong-pw exchange like shell_once
+                let tcp = TcpStream::connect("74.91.114.239:22")?;
+                let mut sess = ssh2::Session::new()?;
+                sess.set_tcp_stream(tcp);
+                sess.set_blocking(false);
+                let dl = std::time::Instant::now() + Duration::from_secs(40);
+                nb(dl, "handshake", || sess.handshake()).map_err(|f| f.anyhow("handshake"))?;
+                eprintln!("handshake ok");
+                let mut prompter = PasswordPrompter { password: "wrong-pw" };
+                let _ = nb(dl, "password", || sess.userauth_password("root", "wrong-pw"));
+                let _ = nb(dl, "kbdint", || sess.userauth_keyboard_interactive("root", &mut prompter));
+                Ok("done".to_string())
+            })();
+            let _ = tx.send(format!("{r:?}"));
+        });
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(s) => {
+                eprintln!("RESULT: {s}");
+                assert!(s.starts_with("Ok"));
+            }
+            Err(_) => panic!("HUNG in app-context handshake/auth"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod hostkey_format_tests {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn hostkey_bytes_vs_known_hosts() {
+        // dallas presents ssh-ed25519. Wire blob = 51 bytes ("ssh-ed25519"+key);
+        // raw key = 32 bytes. Only the wire form matches known_hosts fps.
+        let tcp = TcpStream::connect("74.91.114.239:22").unwrap();
+        let mut sess = ssh2::Session::new().unwrap();
+        sess.set_tcp_stream(tcp);
+        sess.handshake().unwrap();
+        let (key, ktype) = sess.host_key().expect("no host key");
+        eprintln!("host_key len={} type={:?} fp={}", key.len(), ktype, known_hosts::sha256fp(key));
+        // known_hosts ed25519 for dallas ends with this fingerprint:
+        assert_eq!(
+            known_hosts::sha256fp(key),
+            "SHA256:pcXBJ0dmg1eHWXGFGKOj+kyGvvGegNaz1dEGr1IGdH0",
+            "libssh2 host_key bytes do NOT match known_hosts format"
+        );
+    }
+}
+
+#[cfg(test)]
+mod hostkey_pref_tests {
+    use super::*;
+    use crate::known_hosts::ScannedKey;
+
+    fn scanned(types: &[&str]) -> Vec<ScannedKey> {
+        types
+            .iter()
+            .map(|t| ScannedKey {
+                key_type: t.to_string(),
+                b64: String::new(),
+                sha256: format!("SHA256:{t}"),
+                md5: String::new(),
+                line: String::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cached_types_sort_first_in_openssh_order() {
+        // dallas layout: rsa + ed25519 cached, ecdsa fresh from scan.
+        // Must present ed25519 (cached) — never the uncached ecdsa.
+        let cached = vec!["ssh-rsa".to_string(), "ssh-ed25519".to_string()];
+        let s = scanned(&["ssh-rsa", "ecdsa-sha2-nistp256", "ssh-ed25519"]);
+        let sup = ["ssh-ed25519", "ecdsa-sha2-nistp256", "rsa-sha2-512", "ssh-rsa"];
+        let pref = hostkey_pref(&cached, &s, Some(&sup));
+        let first = pref.split(',').next().unwrap();
+        assert_eq!(first, "ssh-ed25519", "pref was: {pref}");
+        assert!(pref.split(',').any(|t| t == "ecdsa-sha2-nistp256"), "fresh types still offered: {pref}");
+    }
+
+    #[test]
+    fn no_cache_falls_back_to_full_supported_list() {
+        let pref = hostkey_pref(&[], &[], Some(&["ssh-ed25519", "ssh-rsa"]));
+        assert_eq!(pref, "ssh-ed25519,ssh-rsa");
+        assert_eq!(hostkey_pref(&[], &[], None), "");
     }
 }

@@ -135,3 +135,66 @@ pub fn parse_key_type(buf: &[u8]) -> String {
     }
     "ssh-unknown".into()
 }
+
+/// Key types already cached for host:port in known_hosts (unhashed lines).
+/// Used to order the handshake preference so the server presents a key we
+/// can verify silently — the same reason the Electron client rarely prompts.
+pub fn cached_key_types(host: &str, port: u16) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let Ok(text) = std::fs::read_to_string(known_hosts_path()) else {
+        return out;
+    };
+    let bracket = format!("[{host}]:{port}");
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let first = parts.next().unwrap_or("");
+        // strip @cert-authority / @revoked markers
+        let (hosts_field, type_field) = if first.starts_with('@') {
+            (parts.next().unwrap_or(""), parts.next().unwrap_or(""))
+        } else {
+            (first, parts.next().unwrap_or(""))
+        };
+        if (type_field.starts_with("ssh-")
+            || type_field.starts_with("ecdsa-")
+            || type_field.starts_with("sk-"))
+            && hosts_field.split(',').any(|h| h == host || h == bracket)
+            && !out.iter().any(|t: &String| t == type_field)
+        {
+            out.push(type_field.to_string());
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    #[test]
+    fn parses_cached_types_per_host() {
+        let _g = crate::TEST_ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("filessh-kh-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let fake_home = tmp.join("home");
+        std::fs::create_dir_all(&fake_home).unwrap();
+        let _env = crate::EnvGuard::redirect(&fake_home, &tmp);
+        let sshdir = fake_home.join(".ssh");
+        std::fs::create_dir_all(&sshdir).unwrap();
+        std::fs::write(
+            sshdir.join("known_hosts"),
+            "example.com ssh-rsa AAAAB3NzaC1yc2E=\nexample.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI\n[example.com]:2222 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY=\n|1|salt|hash ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAH\n",
+        )
+        .unwrap();
+        let t22 = cached_key_types("example.com", 22);
+        assert!(t22.contains(&"ssh-rsa".to_string()), "{t22:?}");
+        assert!(t22.contains(&"ssh-ed25519".to_string()), "{t22:?}");
+        assert!(!t22.iter().any(|t| t.contains("ecdsa")), "{t22:?}");
+        let t2222 = cached_key_types("example.com", 2222);
+        assert!(t2222.contains(&"ecdsa-sha2-nistp256".to_string()), "{t2222:?}");
+        assert!(cached_key_types("other.example", 22).is_empty());
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+}
