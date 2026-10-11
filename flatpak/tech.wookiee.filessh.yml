@@ -1,0 +1,39 @@
+app-id: tech.wookiee.filessh
+runtime: org.gnome.Platform
+runtime-version: '48'
+sdk: org.gnome.Sdk
+command: filessh
+finish-args:
+  # SSH/SFTP connections
+  - --share=network
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --socket=fallback-x11
+  # WebKit compositing
+  - --device=dri
+  # SSH keys + known_hosts (~/.ssh), FileZilla import
+  # (~/.config/filezilla, ~/.filezilla), sessions + logs (~/.config/filessh)
+  - --filesystem=home
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+modules:
+  - name: filessh
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/filessh/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline fetch --manifest-path src-tauri/Cargo.toml
+      - cargo --offline --frozen build --release --manifest-path src-tauri/Cargo.toml
+      - install -Dm755 src-tauri/target/release/filessh /app/bin/filessh
+      - install -Dm644 flatpak/tech.wookiee.filessh.desktop /app/share/applications/tech.wookiee.filessh.desktop
+      - install -Dm644 flatpak/tech.wookiee.filessh.metainfo.xml /app/share/metainfo/tech.wookiee.filessh.metainfo.xml
+      - install -Dm644 assets/icon.png /app/share/icons/hicolor/512x512/apps/tech.wookiee.filessh.png
+    sources:
+      - type: git
+        url: https://github.com/Wookiee-/Filessh.git
+        branch: main
+      - cargo-sources.json

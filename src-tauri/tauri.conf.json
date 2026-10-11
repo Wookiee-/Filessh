@@ -32,7 +32,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "category": "Network",
+    "category": "Utility",
     "shortDescription": "Solar-PuTTY style tabbed SSH client for Linux with FileZilla import",
     "longDescription": "Tabbed GUI SSH client with FileZilla SFTP import."
   }
