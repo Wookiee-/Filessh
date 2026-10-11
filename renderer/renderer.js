@@ -236,39 +236,28 @@ function showTerminal(tabId, label) {
   }
 }
 
-// Per-tab receive stats, painted into the shared status bar so a blank
-// terminal self-reports whether data arrived at all (no console needed).
-const tabStats = {}; // tabId -> { bytes, status, writeErrors, lastPaint }
-function fmtBytes(n) {
-  if (n < 1024) return n + ' B';
-  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
-  return (n / 1048576).toFixed(1) + ' MB';
-}
+// Per-tab receive state. The status bar shows the plain status text;
+// only genuine failures (init/write) add a suffix. No counters.
+const tabStats = {}; // tabId -> { status, writeErrors }
 function paintTermStatus(tabId) {
   if (tabId !== currentTabId) return;
-  const st = tabStats[tabId] || { bytes: 0, status: '', writeErrors: 0 };
-  const dims = (term && typeof term.cols === 'number') ? ` • ${term.cols}×${term.rows}` : '';
-  const flow = st.bytes > 0 ? ` • ${fmtBytes(st.bytes)} received` : ' • 0 B received';
-  const werr = st.writeErrors ? ` • terminal write failed ×${st.writeErrors}` : '';
-  $('termstatus').textContent = st.status + dims + flow + werr;
+  const st = tabStats[tabId] || { status: '', writeErrors: 0 };
+  const werr = st.writeErrors ? ` (terminal write failed ×${st.writeErrors})` : '';
+  $('termstatus').textContent = st.status + werr;
 }
 
 function wireTerminal(tabId, sessionId) {
   window.filessh.onData(tabId, (b64) => {
-    const st = (tabStats[tabId] = tabStats[tabId] || { bytes: 0, status: '', writeErrors: 0, lastPaint: 0 });
-    const wasZero = st.bytes === 0;
-    let n = 0;
+    const st = (tabStats[tabId] = tabStats[tabId] || { status: '', writeErrors: 0 });
     try {
-      const bytes = new Uint8Array(atob(b64).split('').map(c => c.charCodeAt(0)));
-      n = bytes.length;
-      term.write(bytes);
-    } catch (err) { st.writeErrors = (st.writeErrors || 0) + 1; }
-    st.bytes += n;
-    const now = Date.now();
-    if (n > 0 && (wasZero || now - (st.lastPaint || 0) > 500)) { st.lastPaint = now; paintTermStatus(tabId); }
+      term.write(new Uint8Array(atob(b64).split('').map(c => c.charCodeAt(0))));
+    } catch (err) {
+      st.writeErrors = (st.writeErrors || 0) + 1;
+      paintTermStatus(tabId);
+    }
   });
   window.filessh.onStatus(tabId, (s) => {
-    const st = (tabStats[tabId] = tabStats[tabId] || { bytes: 0, status: '', writeErrors: 0, lastPaint: 0 });
+    const st = (tabStats[tabId] = tabStats[tabId] || { status: '', writeErrors: 0 });
     st.status = s.status;
     st.lastPaint = Date.now();
     paintTermStatus(tabId);
