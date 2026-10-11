@@ -255,6 +255,8 @@ function wireTerminal(tabId, sessionId) {
   };
 }
 
+let editorId = null;
+
 function openEditor(s) {
   $('e-name').value = s?.name || '';
   $('e-host').value = s?.host || '';
@@ -265,25 +267,31 @@ function openEditor(s) {
   $('e-keyfile').value = s?.keyfile || '';
   $('e-script').value = s?.startupScript || '';
   $('e-reconnect').checked = s?.autoReconnect !== false;
+  editorId = s?.id || null;
   openModal('editor');
-  $('e-save').onclick = async (ev) => {
-    ev.preventDefault();
-    await window.filessh.saveSession({
-      id: s?.id,
-      name: $('e-name').value.trim(),
-      host: $('e-host').value.trim(),
-      port: Number($('e-port').value) || 22,
-      username: $('e-user').value.trim(),
-      authType: $('e-auth').value,
-      password: $('e-password').value || undefined,
-      keyfile: $('e-keyfile').value.trim(),
-      startupScript: $('e-script').value,
-      autoReconnect: $('e-reconnect').checked,
-    });
-    $('editor').close();
-    refresh();
-  };
 }
+
+// Single save path for the editor: both Save-click and Enter-key submit the
+// method=dialog form. Cancel (value=cancel) skips saving and just closes.
+$('editor-form').addEventListener('submit', async (ev) => {
+  const sub = ev.submitter;
+  if (sub && sub.value === 'cancel') return;
+  ev.preventDefault();
+  await window.filessh.saveSession({
+    id: editorId,
+    name: $('e-name').value.trim(),
+    host: $('e-host').value.trim(),
+    port: Number($('e-port').value) || 22,
+    username: $('e-user').value.trim(),
+    authType: $('e-auth').value,
+    password: $('e-password').value || undefined,
+    keyfile: $('e-keyfile').value.trim(),
+    startupScript: $('e-script').value,
+    autoReconnect: $('e-reconnect').checked,
+  });
+  $('editor').close();
+  refresh();
+});
 
 $('search').addEventListener('input', renderCards);
 $('q-connect').onclick = quickConnect;

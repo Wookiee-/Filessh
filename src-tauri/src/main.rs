@@ -11,6 +11,9 @@ use tauri::{AppHandle, State};
 
 type SharedState = Arc<ssh::AppStateInner>;
 
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // ---- sessions ----
 #[tauri::command]
 fn sessions_list() -> Vec<Value> {

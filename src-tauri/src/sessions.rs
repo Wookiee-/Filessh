@@ -168,3 +168,50 @@ pub struct ImportResult {
     pub total: usize,
     pub skipped: Vec<Value>,
 }
+
+#[cfg(test)]
+mod roundtrip_tests {
+    use super::*;
+    #[test]
+    fn edit_user_and_password_persist() {
+        // isolate store + key file via XDG_CONFIG_HOME (mirrors openEditor save payload)
+        let _g = crate::TEST_ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("filessh-edit-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &tmp);
+        let created = save_session(
+            serde_json::from_value(serde_json::json!({
+                "name": "ls", "host": "96.30.196.167", "port": 22,
+                "username": "mbiiez", "authType": "password", "password": "oldpw"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let id = created.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+        let updated = save_session(
+            serde_json::from_value(serde_json::json!({
+                "id": id, "name": "ls", "host": "96.30.196.167", "port": 22,
+                "username": "newuser", "authType": "password", "password": "newpw",
+                "keyfile": "", "startupScript": "", "autoReconnect": true
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(updated.get("username").and_then(|v| v.as_str()), Some("newuser"));
+        let store = load_store();
+        let rec = store
+            .iter()
+            .find(|s| s.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+            .unwrap();
+        assert_eq!(rec.get("username").and_then(|v| v.as_str()), Some("newuser"));
+        let enc = rec.get("passwordEnc").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(!enc.is_empty());
+        assert_eq!(crate::crypto::decrypt_pw(enc), "newpw");
+        std::fs::remove_dir_all(&tmp).ok();
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
+}

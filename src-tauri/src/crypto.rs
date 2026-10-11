@@ -98,10 +98,21 @@ mod tests {
     use super::*;
     #[test]
     fn aes_roundtrip_and_plain_compat() {
+        // serialize with sessions::roundtrip_tests (both swap XDG_CONFIG_HOME)
+        let _g = crate::TEST_ENV_LOCK.lock().unwrap();
+        let tmp = std::env::temp_dir().join(format!("filessh-crypto-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &tmp);
         let enc = aes_encrypt("hello-world").unwrap();
         assert!(enc.starts_with("aes:"));
         assert_eq!(aes_decrypt(&enc).unwrap(), "hello-world");
         assert_eq!(decrypt_pw("plain:testpw"), "testpw");
         assert_eq!(decrypt_pw(""), "");
+        std::fs::remove_dir_all(&tmp).ok();
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
     }
 }
