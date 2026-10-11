@@ -61,8 +61,25 @@ npm run tauri:dev  # Tauri (same renderer/, Rust backend)
 ## Release
 
 ```bash
-npm run dist         # Electron -> dist/Filessh-0.1.0.AppImage (108 MB)
-npm run tauri:build  # Tauri -> src-tauri/target/release/bundle/ (~15 MB, webkit system)
+npm run dist           # Electron -> dist/Filessh-0.1.0.AppImage (~96 MB, self-contained)
+npm run tauri:build    # Tauri -> src-tauri/target/release/bundle/
+                       #   Filessh_0.1.0_amd64.AppImage (~111 MB, self-contained, webkit bundled)
+                       #   Filessh_0.1.0_amd64.deb / .rpm (~5 MB, needs system webkit2gtk4.1)
+npm run flatpak:build  # Tauri -> user Flatpak install (webkit via GNOME runtime, no host deps)
+flatpak run tech.wookiee.filessh
+```
+
+Size notes: the Tauri binary itself is ~17 MB. The AppImage looks big
+because `linuxdeploy` bundles WebKitGTK + GTK inside it — that also makes
+it run on machines with no webkit installed (unlike the deb/rpm, which
+expect system `webkit2gtk4.1`). The Flatpak is the lean distribution path:
+WebKit comes from the shared GNOME runtime.
+
+After `Cargo.lock` changes, regenerate `flatpak/cargo-sources.json` with
+[flatpak-cargo-generator](https://github.com/flatpak/flatpak-builder-tools/tree/master/cargo):
+
+```bash
+python3 flatpak-cargo-generator.py src-tauri/Cargo.lock -o flatpak/cargo-sources.json
 ```
 
 ## Tests
