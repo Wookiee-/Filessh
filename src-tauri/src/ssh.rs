@@ -335,25 +335,33 @@ async fn verify_hostkey_async(app: &AppHandle, state: &AppState, tab: &str, host
 /// prompt with the password (Electron tryKeyboard parity).
 fn auth_session(sess: &ssh2::Session, username: &str, password: &str, keyfile: &str, key_pp: &str) -> anyhow::Result<()> {
     if !keyfile.is_empty() {
+        phasedbg!("auth", "try pubkey file");
         let pp = if key_pp.is_empty() { None } else { Some(key_pp) };
         if sess.userauth_pubkey_file(username, None, std::path::Path::new(keyfile), pp).is_ok()
             && sess.authenticated()
         {
+            phasedbg!("auth", "pubkey ok");
             return Ok(());
         }
+        phasedbg!("auth", "pubkey failed, trying password");
     }
     if password.is_empty() {
         if keyfile.is_empty() {
             anyhow::bail!("no password or key for authentication");
         }
     } else {
+        phasedbg!("auth", "try password");
         if sess.userauth_password(username, password).is_ok() && sess.authenticated() {
+            phasedbg!("auth", "password ok");
             return Ok(());
         }
+        phasedbg!("auth", "password failed, trying keyboard-interactive");
         let mut prompter = PasswordPrompter { password };
         if sess.userauth_keyboard_interactive(username, &mut prompter).is_ok() && sess.authenticated() {
+            phasedbg!("auth", "keyboard-interactive ok");
             return Ok(());
         }
+        phasedbg!("auth", "keyboard-interactive failed");
     }
     if !sess.authenticated() {
         anyhow::bail!("authentication failed");
@@ -813,6 +821,9 @@ fn shell_once(
                 if d != "save" && d != "once" {
                     anyhow::bail!("host key rejected by user");
                 }
+                phasedbg!(tab, "changed key accepted once");
+            } else {
+                phasedbg!(tab, "host key matches");
             }
         }
     }
@@ -843,8 +854,11 @@ fn shell_once(
     }
     phasedbg!(tab, "authenticated");
     let mut channel = sess.channel_session()?;
+    phasedbg!(tab, "channel open");
     channel.request_pty(&cfg.term, None, Some((cfg.cols, cfg.rows, 0, 0)))?;
+    phasedbg!(tab, "pty ok");
     channel.shell()?;
+    phasedbg!(tab, "shell ok");
     sess.set_blocking(false);
     // Interactive phase: tight latency budget for the shell/forward loops.
     let _ = tuner.set_read_timeout(Some(Duration::from_millis(50)));
@@ -1072,6 +1086,28 @@ mod live_tests {
         let _ = child.kill();
         let _ = child.wait();
         result.unwrap();
+    }
+}
+
+
+#[cfg(test)]
+mod pwprobe_tests {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn time_wrong_password_wan() {
+        // Safe: single failed attempt, exercises the exact hanging call.
+        let start = std::time::Instant::now();
+        let tcp = TcpStream::connect("74.91.114.239:22").unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+        let mut sess = ssh2::Session::new().unwrap();
+        sess.set_timeout(20_000);
+        sess.set_tcp_stream(tcp);
+        sess.handshake().unwrap();
+        eprintln!("handshake took {:?}", start.elapsed());
+        let r = sess.userauth_password("root", "definitely-wrong-pw-12345");
+        eprintln!("userauth_password returned after {:?}: {:?}", start.elapsed(), r.map(|_| "ok").map_err(|e| e.to_string()));
+        assert!(start.elapsed() < Duration::from_secs(25), "HUNG in password auth");
     }
 }
 
