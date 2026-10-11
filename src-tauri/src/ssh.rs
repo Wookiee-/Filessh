@@ -331,7 +331,8 @@ async fn verify_hostkey_async(app: &AppHandle, state: &AppState, tab: &str, host
     Ok(Some((known, scanned)))
 }
 
-/// Key-first, then password. Mirrors the Electron client's auth order.
+/// Key-first, then password, then keyboard-interactive answering every
+/// prompt with the password (Electron tryKeyboard parity).
 fn auth_session(sess: &ssh2::Session, username: &str, password: &str, keyfile: &str, key_pp: &str) -> anyhow::Result<()> {
     if !keyfile.is_empty() {
         let pp = if key_pp.is_empty() { None } else { Some(key_pp) };
@@ -341,15 +342,38 @@ fn auth_session(sess: &ssh2::Session, username: &str, password: &str, keyfile: &
             return Ok(());
         }
     }
-    if !password.is_empty() {
-        sess.userauth_password(username, password)?;
-    } else if keyfile.is_empty() {
-        anyhow::bail!("no password or key for authentication");
+    if password.is_empty() {
+        if keyfile.is_empty() {
+            anyhow::bail!("no password or key for authentication");
+        }
+    } else {
+        if sess.userauth_password(username, password).is_ok() && sess.authenticated() {
+            return Ok(());
+        }
+        let mut prompter = PasswordPrompter { password };
+        if sess.userauth_keyboard_interactive(username, &mut prompter).is_ok() && sess.authenticated() {
+            return Ok(());
+        }
     }
     if !sess.authenticated() {
         anyhow::bail!("authentication failed");
     }
     Ok(())
+}
+
+struct PasswordPrompter<'a> {
+    password: &'a str,
+}
+
+impl ssh2::KeyboardInteractivePrompt for PasswordPrompter<'_> {
+    fn prompt<'a>(
+        &mut self,
+        _username: &str,
+        _instructions: &str,
+        prompts: &[ssh2::Prompt<'a>],
+    ) -> Vec<String> {
+        prompts.iter().map(|_| self.password.to_string()).collect()
+    }
 }
 
 /// Open a direct-tcpip channel, retrying through EAGAIN on nonblocking sessions.
@@ -609,6 +633,7 @@ fn open_jump(
     let tcp = dial(&jump.host, jump.port)?;
     tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut jsess = ssh2::Session::new()?;
+    jsess.set_timeout(30_000); // ceiling for blocking handshake/auth (libssh2 select() ignores socket timeouts)
     jsess.set_tcp_stream(tcp);
     jsess.handshake()?;
     if jump.keepalive_interval > 0 {
@@ -755,6 +780,7 @@ fn shell_once(
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let tuner = stream.try_clone()?;
     let mut sess = ssh2::Session::new()?;
+    sess.set_timeout(30_000); // ceiling for blocking handshake/auth (libssh2 select() ignores socket timeouts)
     sess.set_tcp_stream(stream);
     phasedbg!(tab, "handshake");
     sess.handshake()?;
@@ -884,6 +910,7 @@ pub fn sftp_list(session_id: &str, remote_path: &str) -> anyhow::Result<Vec<Sftp
     let tcp = dial(&host, port as u16)?;
     tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut sess = ssh2::Session::new()?;
+    sess.set_timeout(30_000); // ceiling for blocking handshake/auth (libssh2 select() ignores socket timeouts)
     sess.set_tcp_stream(tcp);
     sess.handshake()?;
     auth_session(&sess, &username, &password, &keyfile, &key_pp)?;
