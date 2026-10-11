@@ -12,9 +12,13 @@ finish-args:
   - --socket=fallback-x11
   # WebKit compositing
   - --device=dri
-  # SSH keys + known_hosts (~/.ssh), FileZilla import
-  # (~/.config/filezilla, ~/.filezilla), sessions + logs (~/.config/filessh)
-  - --filesystem=home
+  # Sessions, key file, logs (same paths the native app uses)
+  - --filesystem=xdg-config/filessh:create
+  # FileZilla import sources (read-only)
+  - --filesystem=xdg-config/filezilla:ro
+  - --filesystem=~/.filezilla:ro
+  # Private keys (read) + known_hosts (read/write)
+  - --filesystem=~/.ssh:create
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 modules:

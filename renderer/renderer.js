@@ -5,7 +5,7 @@ let term = null, fit = null, currentTabId = null;
 const $ = (id) => document.getElementById(id);
 
 // ---- GUI theme (app chrome; terminal themes are separate) ----
-const GUI_THEMES = { light: 'Light', dark: 'Dark', nord: 'Nord', dracula: 'Dracula', solar: 'Solarized', ocean: 'Ocean' };
+const GUI_THEMES = { light: 'Light', dark: 'Dark', nord: 'Nord', dracula: 'Dracula', solar: 'Solarized', ocean: 'Ocean', latte: 'Latte', mocha: 'Mocha', gruvbox: 'Gruvbox', tokyo: 'Tokyo Night', onedark: 'One Dark', palenight: 'Palenight' };
 let guiTheme = localStorage.getItem('filessh-gui-theme') || 'light';
 if (!GUI_THEMES[guiTheme]) guiTheme = 'light';
 function applyGuiTheme() {
