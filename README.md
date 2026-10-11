@@ -9,9 +9,9 @@ Tabbed GUI SSH client with FileZilla SFTP import.
 
 | Layer | Choice in this project | Why |
 |---|---|---|
-| SSH transport | Node `ssh2` (equivalent of Paramiko) | Actively maintained, channels/shell/SFTP, key + password auth, port forwarding |
-| Terminal emulation | `xterm.js` + `addon-fit` | Full VT100/xterm parsing, colors, ncurses/vim/htop work. A Qt text box or Paramiko-only shell can't do this reliably |
-| Shell | Electron | Linux-native, one codebase, `safeStorage` for encrypted passwords |
+| SSH transport | Node `ssh2` (Electron) / Rust `ssh2` crate (Tauri) | Channels/shell/SFTP, key + password auth |
+| Terminal emulation | `xterm.js` + `addon-fit` (vendored in `renderer/vendor/`, shared by both shells) | Full VT100/xterm parsing, colors, ncurses/vim/htop work |
+| Shell | Electron (`main.js`) **or** Tauri v2 / Wry (`src-tauri/`) — same GUI | Linux-native; Tauri binary is ~15 MB vs ~108 MB Electron AppImage |
 
 If you insisted on pure Python, you'd still embed xterm.js in a `QWebEngineView` and keep Paramiko only for transport — same split, more glue code.
 
@@ -54,14 +54,34 @@ App Settings (File → Settings):
 
 ```bash
 npm install
-npm start
+npm start          # Electron
+npm run tauri:dev  # Tauri (same renderer/, Rust backend)
 ```
 
-## Release (AppImage)
+## Release
 
 ```bash
-npm run dist
-# -> dist/Filessh-0.1.0.AppImage (108 MB, portable, no install)
+npm run dist         # Electron -> dist/Filessh-0.1.0.AppImage (108 MB)
+npm run tauri:build  # Tauri -> src-tauri/target/release/bundle/ (~15 MB, webkit system)
+```
+
+## Tests
+
+```bash
+node test/e2e.js                                  # Electron SSH stack vs in-process fake server
+npm run test:rust                                 # Rust: filezilla/csv/crypto round-trips (3 tests)
+```
+
+## Wayland note
+
+On Wayland (e.g. KDE), WebKitGTK's DMABUF renderer can abort with
+`Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display`.
+The Rust backend sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` in-process when
+`WAYLAND_DISPLAY` is present, so no manual env is needed. If you still hit
+compositor issues, fall back to XWayland for that run:
+
+```bash
+GDK_BACKEND=x11 npm run tauri:dev
 ```
 
 Attach the AppImage to a GitHub Release. It bundles its own desktop entry

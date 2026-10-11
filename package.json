@@ -9,7 +9,11 @@
     "dev": "electron . --dev",
     "dist": "electron-builder --linux AppImage",
     "dist:dir": "electron-builder --linux --dir",
-    "test:e2e": "node test/e2e.js"
+    "test:e2e": "node test/e2e.js",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@neutralinojs/neu": "^11.7.2",
@@ -20,7 +24,8 @@
   },
   "devDependencies": {
     "electron": "^33.0.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "@tauri-apps/cli": "^2"
   },
   "build": {
     "appId": "tech.wookiee.filessh",

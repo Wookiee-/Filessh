@@ -1,7 +1,10 @@
-node_modules/
-*.log
-sessions.json
-.key
 dist/
+.key
+*.log
+node_modules/
 .opencode/
+sessions.json
 solarputty-sites.xml
+src-tauri/gen/
+src-tauri/target/
+src-tauri/WixTools/

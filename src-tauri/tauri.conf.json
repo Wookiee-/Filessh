@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Filessh",
+  "version": "0.1.0",
+  "identifier": "tech.wookiee.filessh",
+  "build": {
+    "frontendDist": "../renderer",
+    "beforeBuildCommand": ""
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Filessh",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../assets/icon.png"
+    ],
+    "category": "Network",
+    "shortDescription": "Solar-PuTTY style tabbed SSH client for Linux with FileZilla import",
+    "longDescription": "Tabbed GUI SSH client with FileZilla SFTP import."
+  }
+}
