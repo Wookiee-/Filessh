@@ -1163,6 +1163,30 @@ mod pwprobe_tests {
     }
 }
 
+
+#[cfg(test)]
+mod nbwan_tests {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn nonblocking_full_exchange_wan() {
+        // Same nonblocking sequence as shell_once, wrong password on purpose:
+        // must FAIL FAST (auth rejected), never hang.
+        let start = std::time::Instant::now();
+        let tcp = TcpStream::connect("74.91.114.239:22").unwrap();
+        let mut sess = ssh2::Session::new().unwrap();
+        sess.set_tcp_stream(tcp);
+        sess.set_blocking(false);
+        let dl = std::time::Instant::now() + Duration::from_secs(45);
+        nb(dl, "handshake", || sess.handshake()).map_err(|f| f.anyhow("handshake")).unwrap();
+        eprintln!("nb handshake ok at {:?}", start.elapsed());
+        let r = auth_session(&sess, "root", "definitely-wrong-pw-12345", "", "", dl);
+        eprintln!("nb auth returned at {:?}: {:?}", start.elapsed(), r.as_ref().map(|_| "ok").map_err(|e| e.to_string()));
+        assert!(r.is_err(), "wrong password should fail");
+        assert!(start.elapsed() < Duration::from_secs(45), "HUNG");
+    }
+}
+
 #[cfg(test)]
 mod probe_tests {
     use super::*;
