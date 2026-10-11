@@ -1074,3 +1074,43 @@ mod live_tests {
         result.unwrap();
     }
 }
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    /// Traced handshake + auth-method query against a real WAN host (no
+    /// credentials: "none" auth only). Diagnoses transport/auth-layer stalls
+    /// that localhost tests can't reproduce.
+    /// WAN-dependent: ignored by default, run explicitly for diagnosis.
+    #[test]
+    #[ignore]
+    fn traced_auth_methods_wan() {
+        let (tx, rx) = stdmpsc::channel();
+        std::thread::spawn(move || {
+            let r = (|| -> anyhow::Result<String> {
+                let tcp = TcpStream::connect("74.91.114.239:22")?;
+                tcp.set_read_timeout(Some(Duration::from_secs(10)))?;
+                let mut sess = ssh2::Session::new()?;
+                sess.trace(
+                    ssh2::TraceFlags::AUTH
+                        | ssh2::TraceFlags::TRANS
+                        | ssh2::TraceFlags::KEX
+                        | ssh2::TraceFlags::ERROR
+                        | ssh2::TraceFlags::SOCKET,
+                );
+                sess.set_tcp_stream(tcp);
+                sess.handshake()?;
+                Ok(sess.auth_methods("root")?.to_string())
+            })();
+            let _ = tx.send(format!("{r:?}"));
+        });
+        match rx.recv_timeout(Duration::from_secs(25)) {
+            Ok(s) => {
+                println!("AUTH_METHODS: {s}");
+                assert!(s.starts_with("Ok"), "auth query failed: {s}");
+            }
+            Err(_) => panic!("HUNG in handshake/auth_methods (see libssh2 trace above)"),
+        }
+    }
+}
