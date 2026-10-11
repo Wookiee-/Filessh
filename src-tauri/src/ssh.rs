@@ -681,6 +681,7 @@ fn run_shell_blocking(
     stop_rx: stdmpsc::Receiver<()>,
 ) {
     let tab = cfg.tab_id.clone();
+    phasedbg!(tab, "run start (build: dial-timeout+api-timeout+kbdint+auth-watchdog)");
     emit_status(&app, &tab, "connecting…");
     // TOFU prescan
     let accepted = match verify_hostkey_blocking(&app, &state, &tab, &cfg.host, cfg.port) {
@@ -818,7 +819,28 @@ fn shell_once(
     if cfg.keepalive_interval > 0 {
         sess.set_keepalive(true, cfg.keepalive_interval as u32);
     }
-    auth_session(&sess, &cfg.username, &cfg.password, &cfg.keyfile, &cfg.key_passphrase)?;
+    // Auth runs on a helper thread with a hard watchdog: if the blocking
+    // libssh2 call wedges past its own API timeout, fail this attempt (the
+    // leaked call releases when the dropped session closes the socket)
+    // instead of freezing the tab forever.
+    phasedbg!(tab, "auth start");
+    {
+        let s2 = sess.clone();
+        let (u, p, k, kp) = (
+            cfg.username.clone(),
+            cfg.password.clone(),
+            cfg.keyfile.clone(),
+            cfg.key_passphrase.clone(),
+        );
+        let (tx, rx) = stdmpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(auth_session(&s2, &u, &p, &k, &kp));
+        });
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(r) => r?,
+            Err(_) => anyhow::bail!("authentication timed out (no reply in 60s)"),
+        }
+    }
     phasedbg!(tab, "authenticated");
     let mut channel = sess.channel_session()?;
     channel.request_pty(&cfg.term, None, Some((cfg.cols, cfg.rows, 0, 0)))?;
