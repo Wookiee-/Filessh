@@ -692,7 +692,9 @@ document.querySelectorAll('.set-tab').forEach((tab) => {
   };
 });
 
-$('s-save').onclick = (ev) => {
+$('settings-form').addEventListener('submit', (ev) => {
+  const sub = ev.submitter;
+  if (sub && sub.value === 'cancel') return; // let method=dialog close
   ev.preventDefault();
   setGuiTheme($('s-guitheme').value);
   Object.assign(termPrefs, {
@@ -713,7 +715,7 @@ $('s-save').onclick = (ev) => {
   });
   saveAppSettings();
   $('settings').close();
-};
+});
 
 // ---- File menu actions ----
 function doImport() {

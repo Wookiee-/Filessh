@@ -10,6 +10,7 @@
     "dist": "electron-builder --linux AppImage",
     "dist:dir": "electron-builder --linux --dir",
     "test:e2e": "node test/e2e.js",
+    "desktop:install": "sh scripts/install-desktop.sh",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
