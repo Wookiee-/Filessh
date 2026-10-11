@@ -5,27 +5,56 @@ use serde_json::{Map, Value};
 use std::fs;
 use std::path::PathBuf;
 
-fn candidates() -> Vec<PathBuf> {
-    let mut out = vec![];
+/// Config bases in priority order. Flatpak redirects XDG_CONFIG_HOME into
+/// ~/.var/..., so dirs::config_dir() alone misses the real sessions even
+/// though --filesystem=home keeps them readable. $HOME/.config always wins
+/// when it holds the store; otherwise fall back to the platform config dir
+/// (Electron-era capital-F dir, then portable exe dir, included as leaves).
+fn candidate_bases() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = vec![];
+    if let Some(home) = dirs::home_dir() {
+        out.push(home.join(".config"));
+    }
     if let Some(cfg) = dirs::config_dir() {
-        out.push(cfg.join("filessh").join("sessions.json"));
-        out.push(cfg.join("Filessh").join("sessions.json"));
+        if !out.contains(&cfg) {
+            out.push(cfg);
+        }
     }
     if let Ok(exe) = std::env::current_exe() {
-        // portable fallback next to binary
-        out.push(exe.parent().unwrap_or(std::path::Path::new(".")).join("sessions.json"));
+        if let Some(parent) = exe.parent() {
+            if !out.contains(&parent.to_path_buf()) {
+                out.push(parent.to_path_buf());
+            }
+        }
     }
     out
 }
 
-pub fn store_path() -> PathBuf {
-    let c = candidates();
-    for p in &c {
-        if p.exists() {
-            return p.clone();
+pub(crate) fn stored_dir() -> PathBuf {
+    for base in candidate_bases() {
+        for leaf in ["filessh", "Filessh"] {
+            if base.join(leaf).join("sessions.json").is_file() {
+                return base.join(leaf);
+            }
         }
     }
-    c.into_iter().next().unwrap()
+    // portable installs keep sessions.json next to the binary (old behavior)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            if parent.join("sessions.json").is_file() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+    candidate_bases()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("filessh")
+}
+
+pub fn store_path() -> PathBuf {
+    stored_dir().join("sessions.json")
 }
 
 pub fn load_store() -> Vec<Value> {
@@ -174,12 +203,11 @@ mod roundtrip_tests {
     use super::*;
     #[test]
     fn edit_user_and_password_persist() {
-        // isolate store + key file via XDG_CONFIG_HOME (mirrors openEditor save payload)
+        // isolate store + key file via HOME+XDG (mirrors openEditor save payload)
         let _g = crate::TEST_ENV_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("filessh-edit-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
-        let prev = std::env::var_os("XDG_CONFIG_HOME");
-        std::env::set_var("XDG_CONFIG_HOME", &tmp);
+        let _env = crate::EnvGuard::redirect(&tmp, &tmp);
         let created = save_session(
             serde_json::from_value(serde_json::json!({
                 "name": "ls", "host": "96.30.196.167", "port": 22,
@@ -209,9 +237,41 @@ mod roundtrip_tests {
         assert!(!enc.is_empty());
         assert_eq!(crate::crypto::decrypt_pw(enc), "newpw");
         std::fs::remove_dir_all(&tmp).ok();
-        match prev {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
+    }
+
+    #[test]
+    fn flatpak_layout_finds_host_store() {
+        // Flatpak redirects XDG_CONFIG_HOME to ~/.var/... while $HOME keeps
+        // the real sessions + key. stored_dir() must prefer the host copy.
+        let _g = crate::TEST_ENV_LOCK.lock().unwrap();
+        let base = std::env::temp_dir().join(format!("filessh-fp-{}", std::process::id()));
+        let fake_home = base.join("home");
+        let fake_var = base.join("var-config"); // redirected, stays empty
+        std::fs::create_dir_all(&fake_var).unwrap();
+        {
+            let _env = crate::EnvGuard::redirect(&fake_home, &fake_home.join(".config"));
+            save_session(
+                serde_json::from_value(serde_json::json!({
+                    "name": "host-site", "host": "example.com", "port": 22,
+                    "username": "u", "authType": "password", "password": "secretpw"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(fake_home.join(".config").join("filessh").join("sessions.json").is_file());
         }
+        {
+            let _env = crate::EnvGuard::redirect(&fake_home, &fake_var);
+            assert_eq!(
+                store_path(),
+                fake_home.join(".config").join("filessh").join("sessions.json")
+            );
+            let store = load_store();
+            assert_eq!(store.len(), 1);
+            let enc = store[0].get("passwordEnc").and_then(|v| v.as_str()).unwrap_or("");
+            // key file followed the store, so the password still decrypts
+            assert_eq!(crate::crypto::decrypt_pw(enc), "secretpw");
+        }
+        std::fs::remove_dir_all(&base).ok();
     }
 }

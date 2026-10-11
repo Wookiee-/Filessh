@@ -137,7 +137,7 @@ fn resolve_log_path(explicit: &str, name: &str, base: Option<&str>) -> String {
     let safe: String = name.chars().map(|c| if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '_' }).collect();
     let stamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S").to_string();
     let dir = base.map(|s| s.to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| {
-        dirs::config_dir().unwrap_or_default().join("filessh").join("logs").to_string_lossy().to_string()
+        crate::sessions::stored_dir().join("logs").to_string_lossy().to_string()
     });
     let _ = fs::create_dir_all(&dir);
     format!("{dir}/{safe}-{stamp}.log")

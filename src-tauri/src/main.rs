@@ -14,6 +14,39 @@ type SharedState = Arc<ssh::AppStateInner>;
 #[cfg(test)]
 pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Test-only guard that redirects HOME + XDG_CONFIG_HOME (dirs crate reads
+/// both per call) and restores them on drop. Hold TEST_ENV_LOCK while alive.
+#[cfg(test)]
+pub(crate) struct EnvGuard {
+    prev_home: Option<std::ffi::OsString>,
+    prev_xdg: Option<std::ffi::OsString>,
+}
+
+#[cfg(test)]
+impl EnvGuard {
+    pub(crate) fn redirect(home: &std::path::Path, xdg: &std::path::Path) -> Self {
+        let prev_home = std::env::var_os("HOME");
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("HOME", home);
+        std::env::set_var("XDG_CONFIG_HOME", xdg);
+        Self { prev_home, prev_xdg }
+    }
+}
+
+#[cfg(test)]
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        match &self.prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match &self.prev_xdg {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
+}
+
 // ---- sessions ----
 #[tauri::command]
 fn sessions_list() -> Vec<Value> {
