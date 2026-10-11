@@ -34,6 +34,27 @@ fn emit_data(app: &AppHandle, tab: &str, bytes: &[u8]) {
     let _ = app.emit(&format!("ssh-data-{tab}"), B64.encode(bytes));
 }
 
+/// Phase tracing: visible with FILESSH_DEBUG=1
+/// (`flatpak run tech.wookiee.filessh 2>&1 | grep filessh-dbg`).
+macro_rules! phasedbg {
+    ($tab:expr, $($arg:tt)*) => {
+        if std::env::var_os("FILESSH_DEBUG").is_some() {
+            eprintln!("filessh-dbg [{}] {}", $tab, format!($($arg)*));
+        }
+    };
+}
+
+/// TCP dial with a hard ceiling: a filtered host must surface "error: …"
+/// instead of freezing the tab on "connecting…" forever.
+fn dial(host: &str, port: u16) -> anyhow::Result<TcpStream> {
+    use std::net::ToSocketAddrs;
+    let addr = format!("{host}:{port}")
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("DNS resolution failed for {host}"))?;
+    Ok(TcpStream::connect_timeout(&addr, Duration::from_secs(15))?)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyKey {
     #[serde(rename = "type")]
@@ -502,7 +523,7 @@ fn setup_forwards(
                         break;
                     }
                     match listener.accept() {
-                        Ok(mut chan) => match TcpStream::connect((th.as_str(), tp)) {
+                        Ok(mut chan) => match dial(&th, tp) {
                             Ok(sock) => {
                                 let stop3 = stop2.clone();
                                 std::thread::spawn(move || bridge(sock, chan, &stop3));
@@ -584,7 +605,9 @@ fn open_jump(
     dest_port: u16,
 ) -> anyhow::Result<(TcpStream, JumpGuard)> {
     emit_status(app, tab, "via jump host…");
-    let tcp = TcpStream::connect(format!("{}:{}", jump.host, jump.port))?;
+    phasedbg!(tab, "jump dial {}:{}", jump.host, jump.port);
+    let tcp = dial(&jump.host, jump.port)?;
+    tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut jsess = ssh2::Session::new()?;
     jsess.set_tcp_stream(tcp);
     jsess.handshake()?;
@@ -592,6 +615,7 @@ fn open_jump(
         jsess.set_keepalive(true, jump.keepalive_interval as u32);
     }
     auth_session(&jsess, &jump.username, &jump.password, &jump.keyfile, &jump.key_passphrase)?;
+    phasedbg!(tab, "jump authenticated, opening relay");
     let relay = TcpListener::bind("127.0.0.1:0")?;
     let port = relay.local_addr()?.port();
     relay.set_nonblocking(true)?;
@@ -666,7 +690,10 @@ fn run_shell_blocking(
                     jguard = Some(g);
                     s
                 }
-                None => TcpStream::connect(format!("{}:{}", cfg.host, cfg.port))?,
+                None => {
+                    phasedbg!(tab, "dial {}:{}", cfg.host, cfg.port);
+                    dial(&cfg.host, cfg.port)?
+                }
             };
             shell_once(&app, &state, &cfg, stream, &accepted, &input_rx, &resize_rx, &stop_rx, &mut log_file)
         })();
@@ -722,10 +749,16 @@ fn shell_once(
     log_file: &mut Option<fs::File>,
 ) -> anyhow::Result<ShellEnd> {
     let tab = &cfg.tab_id;
-    stream.set_read_timeout(Some(Duration::from_millis(50)))?;
+    // Generous timeouts for handshake/auth round-trips (WAN RTTs dwarf the
+    // interactive latency budget). try_clone shares the same socket, so the
+    // timeout can be tightened once the shell is interactive below.
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    let tuner = stream.try_clone()?;
     let mut sess = ssh2::Session::new()?;
     sess.set_tcp_stream(stream);
+    phasedbg!(tab, "handshake");
     sess.handshake()?;
+    phasedbg!(tab, "handshake ok");
     // Strict post-handshake host-key check. Known prescan keys pass silently;
     // an unknown presented key prompts (changed-key warning) like makeHostVerifier.
     if let Some((known, _)) = accepted {
@@ -760,11 +793,15 @@ fn shell_once(
         sess.set_keepalive(true, cfg.keepalive_interval as u32);
     }
     auth_session(&sess, &cfg.username, &cfg.password, &cfg.keyfile, &cfg.key_passphrase)?;
+    phasedbg!(tab, "authenticated");
     let mut channel = sess.channel_session()?;
     channel.request_pty(&cfg.term, None, Some((cfg.cols, cfg.rows, 0, 0)))?;
     channel.shell()?;
     sess.set_blocking(false);
+    // Interactive phase: tight latency budget for the shell/forward loops.
+    let _ = tuner.set_read_timeout(Some(Duration::from_millis(50)));
     emit_status(app, tab, "connected");
+    phasedbg!(tab, "shell open");
     if let Some(f) = log_file {
         let _ = writeln!(f, "\n===== {} {}@{}:{} =====", chrono::Utc::now().to_rfc3339(), cfg.username, cfg.host, cfg.port);
     }
@@ -844,7 +881,8 @@ pub fn sftp_list(session_id: &str, remote_path: &str) -> anyhow::Result<Vec<Sftp
     let password = decrypt_pw(s.get("passwordEnc").and_then(|v| v.as_str()).unwrap_or(""));
     let keyfile = s.get("keyfile").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let key_pp = decrypt_pw(s.get("keyPassphraseEnc").and_then(|v| v.as_str()).unwrap_or(""));
-    let tcp = TcpStream::connect(format!("{host}:{port}"))?;
+    let tcp = dial(&host, port as u16)?;
+    tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut sess = ssh2::Session::new()?;
     sess.set_tcp_stream(tcp);
     sess.handshake()?;
@@ -909,5 +947,81 @@ mod forward_tests {
         let (host, p) = h.join().unwrap();
         assert_eq!(host, "example.com");
         assert_eq!(p, 8080);
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    /// Live round-trip through connect auth + PTY shell against the same
+    /// fake ssh2 server test/e2e.js uses (tester/testpw). Guards the
+    /// auth_session refactor and shell plumbing.
+    #[test]
+    fn live_password_shell_echo() {
+        let server_js = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("test")
+            .join("fake-server.js");
+        assert!(server_js.is_file());
+        let mut child = Command::new("node")
+            .arg(&server_js)
+            .arg("2224")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("node fake server");
+        let stdout = child.stdout.take().unwrap();
+        let mut lines = BufReader::new(stdout).lines();
+        let mut up = false;
+        for _ in 0..100 {
+            match lines.next() {
+                Some(Ok(l)) if l.contains("FAKE_SSH_UP") => {
+                    up = true;
+                    break;
+                }
+                _ => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+        assert!(up, "fake server did not start");
+        // drop the reader (closes our copy of the pipe) so the child never blocks on stdout
+        drop(lines);
+
+        let result = (|| -> anyhow::Result<()> {
+            let tcp = TcpStream::connect("127.0.0.1:2224")?;
+            tcp.set_read_timeout(Some(Duration::from_secs(5)))?;
+            let mut sess = ssh2::Session::new()?;
+            sess.set_tcp_stream(tcp);
+            sess.handshake()?;
+            auth_session(&sess, "tester", "testpw", "", "")?;
+            let mut channel = sess.channel_session()?;
+            channel.request_pty("xterm-256color", None, Some((80, 24, 0, 0)))?;
+            channel.shell()?;
+            sess.set_blocking(false);
+            channel.write_all(b"echo hi\n")?;
+            let mut out = String::new();
+            let mut buf = [0u8; 1024];
+            let start = std::time::Instant::now();
+            while start.elapsed() < Duration::from_secs(10) {
+                match channel.read(&mut buf) {
+                    Ok(n) => {
+                        out.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        if out.contains("hi\n") {
+                            return Ok(());
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(20))
+                    }
+                    Err(e) => anyhow::bail!("read: {e}"),
+                }
+            }
+            anyhow::bail!("no echo, got: {out:?}")
+        })();
+        let _ = child.kill();
+        let _ = child.wait();
+        result.unwrap();
     }
 }
