@@ -5,5 +5,5 @@ Exec=filessh
 Icon=tech.wookiee.filessh
 Terminal=false
 Type=Application
-Categories=Network;RemoteAccess;Utility;
+Categories=Network;RemoteAccess;
 StartupWMClass=filessh
