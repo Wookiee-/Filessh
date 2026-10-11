@@ -1,4 +1,6 @@
 dist/
+flatpak/build-dir/
+.flatpak-builder/
 .key
 *.log
 node_modules/
