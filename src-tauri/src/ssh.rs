@@ -331,19 +331,74 @@ async fn verify_hostkey_async(app: &AppHandle, state: &AppState, tab: &str, host
     Ok(Some((known, scanned)))
 }
 
+/// libssh2's "try again" sentinel. LIBSSH2_ERROR_EAGAIN is ABI-stable
+/// (-37, also visible in trace logs) and the ssh2 crate doesn't re-export
+/// the constant, so compare numerically.
+fn is_again(e: &ssh2::Error) -> bool {
+    matches!(e.code(), ssh2::ErrorCode::Session(-37))
+}
+
+enum NbFail {
+    Timeout(String),
+    Op(ssh2::Error),
+}
+
+impl NbFail {
+    fn anyhow(self, what: &str) -> anyhow::Error {
+        match self {
+            NbFail::Timeout(_) => anyhow::anyhow!("{what} timed out"),
+            NbFail::Op(e) => anyhow::anyhow!("{what} failed: {e}"),
+        }
+    }
+}
+
+/// Drive one libssh2 call to completion in nonblocking mode: EAGAIN is
+/// re-polled until `deadline`. Unlike socket/API timeouts (which libssh2 may
+/// ignore in blocking waits), this cannot hang past the deadline.
+fn nb<T>(
+    deadline: std::time::Instant,
+    what: &str,
+    mut f: impl FnMut() -> Result<T, ssh2::Error>,
+) -> Result<T, NbFail> {
+    loop {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(e) if is_again(&e) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(NbFail::Timeout(format!("{what} timed out")));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => return Err(NbFail::Op(e)),
+        }
+    }
+}
+
 /// Key-first, then password, then keyboard-interactive answering every
-/// prompt with the password (Electron tryKeyboard parity).
-fn auth_session(sess: &ssh2::Session, username: &str, password: &str, keyfile: &str, key_pp: &str) -> anyhow::Result<()> {
+/// prompt with the password (Electron tryKeyboard parity). Failures fall
+/// through to the next method; only a deadline aborts the whole attempt.
+fn auth_session(
+    sess: &ssh2::Session,
+    username: &str,
+    password: &str,
+    keyfile: &str,
+    key_pp: &str,
+    deadline: std::time::Instant,
+) -> anyhow::Result<()> {
     if !keyfile.is_empty() {
         phasedbg!("auth", "try pubkey file");
         let pp = if key_pp.is_empty() { None } else { Some(key_pp) };
-        if sess.userauth_pubkey_file(username, None, std::path::Path::new(keyfile), pp).is_ok()
-            && sess.authenticated()
-        {
-            phasedbg!("auth", "pubkey ok");
-            return Ok(());
+        match nb(deadline, "key auth", || {
+            sess.userauth_pubkey_file(username, None, std::path::Path::new(keyfile), pp)
+        }) {
+            Ok(()) if sess.authenticated() => {
+                phasedbg!("auth", "pubkey ok");
+                return Ok(());
+            }
+            Ok(()) => phasedbg!("auth", "pubkey partial, trying password"),
+            Err(NbFail::Timeout(t)) => anyhow::bail!("{t}"),
+            Err(NbFail::Op(_)) => phasedbg!("auth", "pubkey failed, trying password"),
         }
-        phasedbg!("auth", "pubkey failed, trying password");
     }
     if password.is_empty() {
         if keyfile.is_empty() {
@@ -351,17 +406,27 @@ fn auth_session(sess: &ssh2::Session, username: &str, password: &str, keyfile: &
         }
     } else {
         phasedbg!("auth", "try password");
-        if sess.userauth_password(username, password).is_ok() && sess.authenticated() {
-            phasedbg!("auth", "password ok");
-            return Ok(());
+        match nb(deadline, "password auth", || sess.userauth_password(username, password)) {
+            Ok(()) if sess.authenticated() => {
+                phasedbg!("auth", "password ok");
+                return Ok(());
+            }
+            Ok(()) => phasedbg!("auth", "password partial, trying keyboard-interactive"),
+            Err(NbFail::Timeout(t)) => anyhow::bail!("{t}"),
+            Err(NbFail::Op(_)) => phasedbg!("auth", "password failed, trying keyboard-interactive"),
         }
-        phasedbg!("auth", "password failed, trying keyboard-interactive");
         let mut prompter = PasswordPrompter { password };
-        if sess.userauth_keyboard_interactive(username, &mut prompter).is_ok() && sess.authenticated() {
-            phasedbg!("auth", "keyboard-interactive ok");
-            return Ok(());
+        match nb(deadline, "keyboard-interactive auth", || {
+            sess.userauth_keyboard_interactive(username, &mut prompter)
+        }) {
+            Ok(()) if sess.authenticated() => {
+                phasedbg!("auth", "keyboard-interactive ok");
+                return Ok(());
+            }
+            Ok(()) => {}
+            Err(NbFail::Timeout(t)) => anyhow::bail!("{t}"),
+            Err(NbFail::Op(e)) => anyhow::bail!("authentication failed: {e}"),
         }
-        phasedbg!("auth", "keyboard-interactive failed");
     }
     if !sess.authenticated() {
         anyhow::bail!("authentication failed");
@@ -384,19 +449,12 @@ impl ssh2::KeyboardInteractivePrompt for PasswordPrompter<'_> {
     }
 }
 
-/// Open a direct-tcpip channel, retrying through EAGAIN on nonblocking sessions.
+/// Open a direct-tcpip channel through the nonblocking driver (deadline-
+/// bounded like everything else; the old fixed-retry loop is subsumed).
 fn open_direct(sess: &ssh2::Session, host: &str, port: u16) -> anyhow::Result<ssh2::Channel> {
-    let mut last = anyhow::anyhow!("channel open failed");
-    for _ in 0..40 {
-        match sess.channel_direct_tcpip(host, port, None) {
-            Ok(ch) => return Ok(ch),
-            Err(e) => {
-                last = anyhow::anyhow!(e.to_string());
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        }
-    }
-    Err(last)
+    let dl = std::time::Instant::now() + Duration::from_secs(30);
+    nb(dl, "tunnel channel", || sess.channel_direct_tcpip(host, port, None))
+        .map_err(|f| f.anyhow("tunnel channel"))
 }
 
 /// Bidirectional copy between a local TCP socket and an SSH channel.
@@ -641,13 +699,15 @@ fn open_jump(
     let tcp = dial(&jump.host, jump.port)?;
     tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut jsess = ssh2::Session::new()?;
-    jsess.set_timeout(30_000); // ceiling for blocking handshake/auth (libssh2 select() ignores socket timeouts)
+    jsess.set_timeout(30_000);
     jsess.set_tcp_stream(tcp);
-    jsess.handshake()?;
+    jsess.set_blocking(false);
+    let jdl = std::time::Instant::now() + Duration::from_secs(60);
+    nb(jdl, "jump handshake", || jsess.handshake()).map_err(|f| f.anyhow("jump handshake"))?;
     if jump.keepalive_interval > 0 {
         jsess.set_keepalive(true, jump.keepalive_interval as u32);
     }
-    auth_session(&jsess, &jump.username, &jump.password, &jump.keyfile, &jump.key_passphrase)?;
+    auth_session(&jsess, &jump.username, &jump.password, &jump.keyfile, &jump.key_passphrase, jdl)?;
     phasedbg!(tab, "jump authenticated, opening relay");
     let relay = TcpListener::bind("127.0.0.1:0")?;
     let port = relay.local_addr()?.port();
@@ -789,10 +849,14 @@ fn shell_once(
     stream.set_read_timeout(Some(Duration::from_secs(30)))?;
     let tuner = stream.try_clone()?;
     let mut sess = ssh2::Session::new()?;
-    sess.set_timeout(30_000); // ceiling for blocking handshake/auth (libssh2 select() ignores socket timeouts)
+    sess.set_timeout(30_000); // backstop; the nb() driver below is the real ceiling
     sess.set_tcp_stream(stream);
+    // Nonblocking from the start: every setup call below is EAGAIN-polled
+    // with our own deadline, so no libssh2 wait can wedge the tab.
+    sess.set_blocking(false);
+    let setup_dl = std::time::Instant::now() + Duration::from_secs(60);
     phasedbg!(tab, "handshake");
-    sess.handshake()?;
+    nb(setup_dl, "handshake", || sess.handshake()).map_err(|f| f.anyhow("handshake"))?;
     phasedbg!(tab, "handshake ok");
     // Strict post-handshake host-key check. Known prescan keys pass silently;
     // an unknown presented key prompts (changed-key warning) like makeHostVerifier.
@@ -830,36 +894,20 @@ fn shell_once(
     if cfg.keepalive_interval > 0 {
         sess.set_keepalive(true, cfg.keepalive_interval as u32);
     }
-    // Auth runs on a helper thread with a hard watchdog: if the blocking
-    // libssh2 call wedges past its own API timeout, fail this attempt (the
-    // leaked call releases when the dropped session closes the socket)
-    // instead of freezing the tab forever.
-    phasedbg!(tab, "auth start");
-    {
-        let s2 = sess.clone();
-        let (u, p, k, kp) = (
-            cfg.username.clone(),
-            cfg.password.clone(),
-            cfg.keyfile.clone(),
-            cfg.key_passphrase.clone(),
-        );
-        let (tx, rx) = stdmpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(auth_session(&s2, &u, &p, &k, &kp));
-        });
-        match rx.recv_timeout(Duration::from_secs(60)) {
-            Ok(r) => r?,
-            Err(_) => anyhow::bail!("authentication timed out (no reply in 60s)"),
-        }
-    }
+    // Auth runs through the same nonblocking driver (deadline-bounded).
+    // The old helper-thread watchdog is gone: nb() cannot hang, so there is
+    // nothing to outlive the attempt and wedge the shared session lock.
+    auth_session(&sess, &cfg.username, &cfg.password, &cfg.keyfile, &cfg.key_passphrase, setup_dl)?;
     phasedbg!(tab, "authenticated");
-    let mut channel = sess.channel_session()?;
+    let mut channel = nb(setup_dl, "open channel", || sess.channel_session()).map_err(|f| f.anyhow("open channel"))?;
     phasedbg!(tab, "channel open");
-    channel.request_pty(&cfg.term, None, Some((cfg.cols, cfg.rows, 0, 0)))?;
+    nb(setup_dl, "pty request", || {
+        channel.request_pty(&cfg.term, None, Some((cfg.cols, cfg.rows, 0, 0)))
+    })
+    .map_err(|f| f.anyhow("pty request"))?;
     phasedbg!(tab, "pty ok");
-    channel.shell()?;
+    nb(setup_dl, "shell request", || channel.shell()).map_err(|f| f.anyhow("shell request"))?;
     phasedbg!(tab, "shell ok");
-    sess.set_blocking(false);
     // Interactive phase: tight latency budget for the shell/forward loops.
     let _ = tuner.set_read_timeout(Some(Duration::from_millis(50)));
     emit_status(app, tab, "connected");
@@ -946,13 +994,15 @@ pub fn sftp_list(session_id: &str, remote_path: &str) -> anyhow::Result<Vec<Sftp
     let tcp = dial(&host, port as u16)?;
     tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
     let mut sess = ssh2::Session::new()?;
-    sess.set_timeout(30_000); // ceiling for blocking handshake/auth (libssh2 select() ignores socket timeouts)
+    sess.set_timeout(30_000);
     sess.set_tcp_stream(tcp);
-    sess.handshake()?;
-    auth_session(&sess, &username, &password, &keyfile, &key_pp)?;
-    let sftp = sess.sftp()?;
+    sess.set_blocking(false);
+    let sdl = std::time::Instant::now() + Duration::from_secs(60);
+    nb(sdl, "sftp handshake", || sess.handshake()).map_err(|f| f.anyhow("sftp handshake"))?;
+    auth_session(&sess, &username, &password, &keyfile, &key_pp, sdl)?;
+    let sftp = nb(sdl, "sftp open", || sess.sftp()).map_err(|f| f.anyhow("sftp open"))?;
     let path = if remote_path.is_empty() { "." } else { remote_path };
-    let entries = sftp.readdir(std::path::Path::new(path))?;
+    let entries = nb(sdl, "sftp list", || sftp.readdir(std::path::Path::new(path))).map_err(|f| f.anyhow("sftp list"))?;
     Ok(entries.into_iter().map(|(p, st)| SftpEntry {
         filename: p.file_name().and_then(|x| x.to_str()).unwrap_or("").to_string(),
         longname: None,
@@ -1057,12 +1107,14 @@ mod live_tests {
             tcp.set_read_timeout(Some(Duration::from_secs(5)))?;
             let mut sess = ssh2::Session::new()?;
             sess.set_tcp_stream(tcp);
-            sess.handshake()?;
-            auth_session(&sess, "tester", "testpw", "", "")?;
-            let mut channel = sess.channel_session()?;
-            channel.request_pty("xterm-256color", None, Some((80, 24, 0, 0)))?;
-            channel.shell()?;
-            sess.set_blocking(false);
+            sess.set_blocking(false); // mirror production: everything below goes through nb()
+            let dl = std::time::Instant::now() + Duration::from_secs(30);
+            nb(dl, "handshake", || sess.handshake()).map_err(|f| f.anyhow("handshake"))?;
+            auth_session(&sess, "tester", "testpw", "", "", dl)?;
+            let mut channel = nb(dl, "open channel", || sess.channel_session()).map_err(|f| f.anyhow("open channel"))?;
+            nb(dl, "pty", || channel.request_pty("xterm-256color", None, Some((80, 24, 0, 0))))
+                .map_err(|f| f.anyhow("pty"))?;
+            nb(dl, "shell", || channel.shell()).map_err(|f| f.anyhow("shell"))?;
             channel.write_all(b"echo hi\n")?;
             let mut out = String::new();
             let mut buf = [0u8; 1024];
@@ -1148,5 +1200,65 @@ mod probe_tests {
             }
             Err(_) => panic!("HUNG in handshake/auth_methods (see libssh2 trace above)"),
         }
+    }
+}
+
+#[cfg(test)]
+mod handshake_bisect_tests {
+    use super::*;
+
+    fn variant(name: &str, setup: fn(TcpStream) -> ssh2::Session, secs: u64) -> bool {
+        let (tx, rx) = stdmpsc::channel();
+        std::thread::spawn(move || {
+            let r = (|| -> anyhow::Result<()> {
+                let tcp = TcpStream::connect("74.91.114.239:22")?;
+                let mut sess = setup(tcp);
+                sess.handshake()?;
+                Ok(())
+            })();
+            let _ = tx.send(format!("{r:?}"));
+        });
+        match rx.recv_timeout(Duration::from_secs(secs)) {
+            Ok(s) => {
+                eprintln!("{name}: finished -> {s}");
+                s.starts_with("Ok")
+            }
+            Err(_) => {
+                eprintln!("{name}: HUNG past {secs}s");
+                false
+            }
+        }
+    }
+
+    fn plain(tcp: TcpStream) -> ssh2::Session {
+        tcp.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let mut s = ssh2::Session::new().unwrap();
+        s.set_tcp_stream(tcp);
+        s
+    }
+    fn with_big_timeout(tcp: TcpStream) -> ssh2::Session {
+        tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        let _tuner = tcp.try_clone().unwrap();
+        std::mem::forget(_tuner);
+        let mut s = ssh2::Session::new().unwrap();
+        s.set_tcp_stream(tcp);
+        s
+    }
+    fn with_api_timeout(tcp: TcpStream) -> ssh2::Session {
+        tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        let _tuner = tcp.try_clone().unwrap();
+        std::mem::forget(_tuner);
+        let mut s = ssh2::Session::new().unwrap();
+        s.set_timeout(30_000);
+        s.set_tcp_stream(tcp);
+        s
+    }
+
+    #[test]
+    #[ignore]
+    fn bisect_handshake_hang() {
+        assert!(variant("V1 plain", plain, 25), "control failed?!");
+        assert!(variant("V2 +30s+tuner", with_big_timeout, 40));
+        assert!(variant("V3 +api_timeout", with_api_timeout, 45));
     }
 }
