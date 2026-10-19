@@ -16,7 +16,7 @@ jobs:
   tauri:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: System dependencies
         run: |
@@ -27,7 +27,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -36,7 +36,11 @@ jobs:
 
       - run: npm run tauri:build
 
-      - uses: actions/upload-artifact@v4
+      - name: Check the binary starts its libraries
+        run: |
+          ! ldd src-tauri/target/release/filessh | grep "not found"
+
+      - uses: actions/upload-artifact@v7
         with:
           name: tauri-bundles
           path: |
@@ -48,10 +52,10 @@ jobs:
   flatpak:
     runs-on: ubuntu-latest
     container:
-      image: bilelmoussaoui/flatpak-github-actions:gnome-48
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       options: --privileged
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
@@ -64,16 +68,16 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: tauri-bundles
           path: /tmp/bundles
 
       - name: Build package
         run: |
-          pacman -Syu --noconfirm base-devel git
+          pacman -Syu --noconfirm base-devel git gtk3 hicolor-icon-theme libsoup3 webkit2gtk-4.1 openssl
           useradd -m builder
           cp /tmp/bundles/deb/*.deb packaging/arch/
           chown -R builder packaging/arch
@@ -81,7 +85,7 @@ jobs:
           su builder -c "makepkg -f --noconfirm"
           cp *.pkg.tar.zst /tmp/bundles/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: arch-package
           path: /tmp/bundles/*.pkg.tar.zst
@@ -91,9 +95,9 @@ jobs:
     needs: [tauri, flatpak, arch]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
