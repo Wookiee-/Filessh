@@ -1,0 +1,110 @@
+name: rolling
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rolling
+  cancel-in-progress: true
+
+jobs:
+  tauri:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev libssl-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev rpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - run: npm run tauri:build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tauri-bundles
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+  flatpak:
+    runs-on: ubuntu-latest
+    container:
+      image: bilelmoussaoui/flatpak-github-actions:gnome-48
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: flatpak/tech.wookiee.filessh.yml
+          cache-key: flatpak-${{ github.sha }}
+          bundle: Filessh.flatpak
+
+  arch:
+    needs: tauri
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tauri-bundles
+          path: /tmp/bundles
+
+      - name: Build package
+        run: |
+          pacman -Syu --noconfirm base-devel git
+          useradd -m builder
+          cp /tmp/bundles/deb/*.deb packaging/arch/
+          chown -R builder packaging/arch
+          cd packaging/arch
+          su builder -c "makepkg -f --noconfirm"
+          cp *.pkg.tar.zst /tmp/bundles/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch-package
+          path: /tmp/bundles/*.pkg.tar.zst
+          if-no-files-found: error
+
+  release:
+    needs: [tauri, flatpak, arch]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Replace rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete rolling --cleanup-tag --yes || true
+          gh release create rolling $(find dist -type f) \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Filessh rolling ($(git rev-parse --short HEAD))" \
+            --notes "Automatically built from main at $GITHUB_SHA."

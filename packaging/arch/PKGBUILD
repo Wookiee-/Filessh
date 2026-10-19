@@ -7,8 +7,8 @@ arch=('x86_64')
 url='https://github.com/Wookiee-/Filessh'
 license=('custom')
 depends=('gtk3' 'hicolor-icon-theme' 'libsoup3' 'openssl' 'webkit2gtk-4.1')
-source=("Filessh_0.1.0_amd64.deb::https://github.com/Wookiee-/Filessh/releases/download/v0.1.0/Filessh_0.1.0_amd64.deb")
-sha256sums=('081b327e447918d4aa0cba7c53357751e77d3cf2a26b478ca2234c494f9489dc')
+source=("Filessh_0.1.0_amd64.deb")
+sha256sums=('SKIP')
 
 package() {
   bsdtar -xf "$srcdir/Filessh_0.1.0_amd64.deb" -C "$srcdir"
