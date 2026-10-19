@@ -83,7 +83,7 @@ jobs:
           chown -R builder packaging/arch
           cd packaging/arch
           su builder -c "makepkg -f --noconfirm"
-          cp *.pkg.tar.zst /tmp/bundles/
+          find . -name '*.pkg.tar.zst' ! -name '*-debug-*' -exec cp {} /tmp/bundles/ \;
 
       - uses: actions/upload-artifact@v7
         with:
