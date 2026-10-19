@@ -1,6 +1,8 @@
 let sessions = [];
 let activeTab = 'overview';
-let term = null, fit = null, currentTabId = null;
+const termTabs = new Map(); // tabId -> { term, fit, pane, sessionId }
+let currentTabId = null;
+let tabSeq = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -45,14 +47,21 @@ let termPrefs = { theme: 'dark', term: 'xterm-256color', fontSize: 14, cursor: '
 try { Object.assign(termPrefs, JSON.parse(localStorage.getItem('filessh-term-prefs') || '{}')); } catch {}
 function saveTermPrefs() { localStorage.setItem('filessh-term-prefs', JSON.stringify(termPrefs)); }
 
+function currentTerm() {
+  const t = termTabs.get(currentTabId);
+  return t ? t.term : null;
+}
+
 function applyTermPrefs() {
-  if (!term) return;
-  term.options.theme = THEMES[termPrefs.theme] || THEMES.dark;
-  term.options.fontSize = termPrefs.fontSize;
-  term.options.cursorStyle = termPrefs.cursor;
-  term.options.cursorBlink = termPrefs.blink;
-  if (window.__fit) { try { window.__fit.fit(); } catch {} }
-  term.focus();
+  for (const t of termTabs.values()) {
+    t.term.options.theme = THEMES[termPrefs.theme] || THEMES.dark;
+    t.term.options.fontSize = termPrefs.fontSize;
+    t.term.options.cursorStyle = termPrefs.cursor;
+    t.term.options.cursorBlink = termPrefs.blink;
+    try { t.fit.fit(); } catch {}
+  }
+  const cur = currentTerm();
+  if (cur) cur.focus();
 }
 
 // ---- dialogs: non-modal show() + shared dim backdrop ----
@@ -125,16 +134,32 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+function newTabId() {
+  return `t-${Date.now().toString(36)}-${++tabSeq}`;
+}
+
+// Double-clicks and repeated Connect presses fire several launches in a row;
+// ignore repeats of the same target within a second.
+const lastLaunch = new Map();
+function isDuplicateLaunch(key) {
+  const now = Date.now();
+  if (now - (lastLaunch.get(key) || 0) < 1000) return true;
+  lastLaunch.set(key, now);
+  return false;
+}
+
 async function openSession(s) {
-  const tabId = `t-${Date.now().toString(36)}`;
+  if (isDuplicateLaunch('s:' + s.id)) return;
+  const tabId = newTabId();
   addTab(tabId, s.name);
-  showTerminal(tabId, s.name);
+  showTerminal(tabId, s.name, s.id);
   wireTerminal(tabId, s.id);
+  const t = termTabs.get(tabId);
   try {
-    await window.filessh.connect({ tabId, sessionId: s.id, termType: termPrefs.term, logDir: appSettings.logDir, autoLog: appSettings.autoLog, cols: term ? term.cols : 120, rows: term ? term.rows : 30 });
+    await window.filessh.connect({ tabId, sessionId: s.id, termType: termPrefs.term, logDir: appSettings.logDir, autoLog: appSettings.autoLog, cols: t.term.cols, rows: t.term.rows });
   } catch (err) {
     $('termstatus').textContent = 'error: ' + (err.message || err);
-    if (term) term.writeln('\r\n*** connection failed: ' + (err.message || err) + ' ***');
+    t.term.writeln('\r\n*** connection failed: ' + (err.message || err) + ' ***');
   }
 }
 
@@ -147,15 +172,17 @@ async function quickConnect() {
   const m = host.match(/^(?:(.*)@)?([^:]+)(?::(\d+))?$/);
   if (m && (m[1] || m[2])) { if (m[1]) user = m[1]; port = Number(m[3]) || port; }
   const target = m ? m[2] : host;
-  const tabId = `t-${Date.now().toString(36)}`;
+  if (isDuplicateLaunch(`q:${user}@${target}:${port}`)) return;
+  const tabId = newTabId();
   addTab(tabId, `${user}@${target}`);
-  showTerminal(tabId, `${user}@${target}`);
+  showTerminal(tabId, `${user}@${target}`, null);
   wireTerminal(tabId, null);
+  const t = termTabs.get(tabId);
   try {
-    await window.filessh.connect({ tabId, quick: { host: target, username: user, password, port }, termType: termPrefs.term, logDir: appSettings.logDir, autoLog: appSettings.autoLog, cols: term ? term.cols : 120, rows: term ? term.rows : 30 });
+    await window.filessh.connect({ tabId, quick: { host: target, username: user, password, port }, termType: termPrefs.term, logDir: appSettings.logDir, autoLog: appSettings.autoLog, cols: t.term.cols, rows: t.term.rows });
   } catch (err) {
     $('termstatus').textContent = 'error: ' + (err.message || err);
-    if (term) term.writeln('\r\n*** connection failed: ' + (err.message || err) + ' ***');
+    t.term.writeln('\r\n*** connection failed: ' + (err.message || err) + ' ***');
   }
 }
 
@@ -178,37 +205,56 @@ function paintTabs() {
   });
   $('overview').classList.toggle('hidden', activeTab !== 'overview');
   $('termview').classList.toggle('hidden', activeTab === 'overview');
-  if (window.__fit && activeTab !== 'overview') setTimeout(() => { window.__fit.fit(); if (term) term.focus(); }, 50);
-  else if (activeTab === 'overview') setTimeout(() => $('search').focus(), 50);
+  document.querySelectorAll('#terminal .term-pane').forEach(p => {
+    p.classList.toggle('hidden', p.dataset.tab !== activeTab);
+  });
+  if (activeTab !== 'overview' && termTabs.has(activeTab)) {
+    currentTabId = activeTab;
+    paintTermStatus(activeTab);
+    const t = termTabs.get(activeTab);
+    setTimeout(() => { try { t.fit.fit(); } catch {} t.term.focus(); }, 50);
+  } else if (activeTab === 'overview') {
+    setTimeout(() => $('search').focus(), 50);
+  }
 }
 
-function showTerminal(tabId, label) {
+function showTerminal(tabId, label, sessionId) {
   currentTabId = tabId;
   activeTab = tabId;
-  paintTabs();
   tabStats[tabId] = { bytes: 0, status: 'connecting…', writeErrors: 0, lastPaint: Date.now() };
-  paintTermStatus(tabId);
-  if (term) { try { term.dispose(); } catch {} }
+  const pane = document.createElement('div');
+  pane.className = 'term-pane';
+  pane.dataset.tab = tabId;
+  $('terminal').appendChild(pane);
+  let term, fit;
   try {
     term = new Terminal({
-    cursorBlink: termPrefs.blink,
-    cursorStyle: termPrefs.cursor,
-    fontSize: termPrefs.fontSize,
-    fontFamily: 'JetBrains Mono, Fira Code, Consolas, monospace',
-    scrollback: termPrefs.scrollback,
-    theme: THEMES[termPrefs.theme] || THEMES.dark,
-  });
-  fit = new FitAddon.FitAddon();
-  term.loadAddon(fit);
-  term.open($('terminal'));
+      cursorBlink: termPrefs.blink,
+      cursorStyle: termPrefs.cursor,
+      fontSize: termPrefs.fontSize,
+      fontFamily: 'JetBrains Mono, Fira Code, Consolas, monospace',
+      scrollback: termPrefs.scrollback,
+      theme: THEMES[termPrefs.theme] || THEMES.dark,
+    });
+    fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(pane);
+  } catch (err) {
+    pane.remove();
+    $('termstatus').textContent = 'terminal init failed: ' + ((err && err.message) || err);
+    $('termstatus').classList.add('error');
+    throw err; // stop wireTerminal/connect: no terminal, no session
+  }
+  termTabs.set(tabId, { term, fit, pane, sessionId });
+  paintTabs();
+  paintTermStatus(tabId);
   fit.fit();
-  window.__fit = fit;
   term.focus(); // cursor starts in the terminal
-  $('terminal').onclick = () => term && term.focus();
+  pane.onclick = () => term.focus();
   // clipboard behavior (Settings)
-  $('terminal').oncontextmenu = async (ev) => {
+  pane.oncontextmenu = async (ev) => {
     ev.preventDefault();
-    if (!appSettings.pasteRight || !term) return;
+    if (!appSettings.pasteRight) return;
     try {
       const text = await navigator.clipboard.readText();
       if (text) window.filessh.sendInput(tabId, btoa(unescape(encodeURIComponent(text))));
@@ -216,7 +262,7 @@ function showTerminal(tabId, label) {
     term.focus();
   };
   term.onSelectionChange(() => {
-    if (!appSettings.copySelect || !term) return;
+    if (!appSettings.copySelect) return;
     try { navigator.clipboard.writeText(term.getSelection()); } catch {}
   });
   term.onData((d) => window.filessh.sendInput(tabId, btoa(unescape(encodeURIComponent(d)))));
@@ -228,12 +274,6 @@ function showTerminal(tabId, label) {
     lastDims = { cols, rows };
     window.filessh.resize(tabId, cols, rows);
   });
-  } catch (err) {
-    term = null;
-    $('termstatus').textContent = 'terminal init failed: ' + ((err && err.message) || err);
-    $('termstatus').classList.add('error');
-    throw err; // stop wireTerminal/connect: no terminal, no session
-  }
 }
 
 // Per-tab receive state. The status bar shows the plain status text;
@@ -247,16 +287,21 @@ function paintTermStatus(tabId) {
 }
 
 function wireTerminal(tabId, sessionId) {
+  ensureVerifyListener(tabId);
   window.filessh.onData(tabId, (b64) => {
+    const t = termTabs.get(tabId);
+    if (!t) return;
     const st = (tabStats[tabId] = tabStats[tabId] || { status: '', writeErrors: 0 });
     try {
-      term.write(new Uint8Array(atob(b64).split('').map(c => c.charCodeAt(0))));
+      t.term.write(new Uint8Array(atob(b64).split('').map(c => c.charCodeAt(0))));
     } catch (err) {
       st.writeErrors = (st.writeErrors || 0) + 1;
       paintTermStatus(tabId);
     }
   });
   window.filessh.onStatus(tabId, (s) => {
+    const t = termTabs.get(tabId);
+    if (!t) return;
     const st = (tabStats[tabId] = tabStats[tabId] || { status: '', writeErrors: 0 });
     st.status = s.status;
     st.lastPaint = Date.now();
@@ -264,7 +309,7 @@ function wireTerminal(tabId, sessionId) {
     $('termstatus').classList.toggle('error', /^(error|host key rejected)/i.test(s.status));
     // A new shell prints its prompt on whatever line is current; mark
     // reconnects so prompts never concatenate on one line.
-    if (/^reconnecting/i.test(s.status) && term) term.writeln('\r\n--- reconnecting ---');
+    if (/^reconnecting/i.test(s.status)) t.term.writeln('\r\n--- reconnecting ---');
   });
   window.filessh.onClosed(tabId, () => {
     const st = (tabStats[tabId] = tabStats[tabId] || { bytes: 0, status: '', writeErrors: 0, lastPaint: 0 });
@@ -273,18 +318,6 @@ function wireTerminal(tabId, sessionId) {
     paintTermStatus(tabId);
   });
   window.filessh.onExited(tabId, () => closeTabUI(tabId, false)); // clean logout closes the tab
-  $('term-close').onclick = () => closeTabUI(tabId, true);
-  $('sftp-toggle').onclick = () => $('sftp').classList.toggle('hidden');
-  if ($('sftp-path').value === '.') $('sftp-path').value = appSettings.sftpPath || '.';
-  $('sftp-go').onclick = async () => {
-    if (!sessionId) { $('sftp-list').textContent = 'SFTP browser needs a saved session.'; return; }
-    try {
-      const list = await window.filessh.sftpList(sessionId, $('sftp-path').value || '.');
-      $('sftp-list').innerHTML = list.map(f => `<div>${esc(f.filename)} <span style="color:#888">${esc(String(f.attrs.size))}</span></div>`).join('');
-    } catch (err) {
-      $('sftp-list').textContent = 'Error: ' + err.message;
-    }
-  };
 }
 
 let editorId = null;
@@ -331,6 +364,18 @@ $('newtab').onclick = () => { activeTab = 'overview'; paintTabs(); $('search').f
 $('manage').onclick = openManager;
 $('settings-btn').onclick = openSettings;
 document.querySelector('#tabs .tab').onclick = () => { activeTab = 'overview'; paintTabs(); };
+$('term-close').onclick = () => { if (currentTabId) closeTabUI(currentTabId, true); };
+$('sftp-toggle').onclick = () => $('sftp').classList.toggle('hidden');
+$('sftp-go').onclick = async () => {
+  const t = termTabs.get(currentTabId);
+  if (!t || !t.sessionId) { $('sftp-list').textContent = 'SFTP browser needs a saved session.'; return; }
+  try {
+    const list = await window.filessh.sftpList(t.sessionId, $('sftp-path').value || '.');
+    $('sftp-list').innerHTML = list.map(f => `<div>${esc(f.filename)} <span style="color:#888">${esc(String(f.attrs.size))}</span></div>`).join('');
+  } catch (err) {
+    $('sftp-list').textContent = 'Error: ' + err.message;
+  }
+};
 $('import').onclick = async () => {
   const r = await window.filessh.importFile();
   if (!r) return;
@@ -367,18 +412,11 @@ function showVerify(tabId, info) {
 }
 
 function ensureVerifyChoice(tabId) {
-  const done = (d) => { window.filessh.respondVerify(tabId, d); $('verify').close(); if (term) term.focus(); };
+  const done = (d) => { window.filessh.respondVerify(tabId, d); $('verify').close(); const t = currentTerm(); if (t) t.focus(); };
   $('v-save').onclick = () => done('save');
   $('v-once').onclick = () => done('once');
   $('v-reject').onclick = () => done('reject');
 }
-
-// hook verify listener into tab creation
-const _wireTerminal = wireTerminal;
-wireTerminal = function (tabId, sessionId) {
-  ensureVerifyListener(tabId);
-  _wireTerminal(tabId, sessionId);
-};
 
 // ---- Site Manager (FileZilla-style: modify sites) ----
 let mgrSelected = null;
@@ -681,6 +719,7 @@ $('m-x').onclick = () => $('manager').close();
 let appSettings = { confirmClose: true, defaultReconnect: true, sftpPath: '.', copySelect: false, pasteRight: true, ka: 0, logDir: '', autoLog: false };
 try { Object.assign(appSettings, JSON.parse(localStorage.getItem('filessh-settings') || '{}')); } catch {}
 function saveAppSettings() { localStorage.setItem('filessh-settings', JSON.stringify(appSettings)); }
+if ($('sftp-path').value === '.') $('sftp-path').value = appSettings.sftpPath || '.';
 
 function openSettings() {
   const st = $('s-theme'), tm = $('s-term');
@@ -759,12 +798,20 @@ function doImport() {
 }
 
 function closeTabUI(tabId, confirmClose) {
+  if (!tabId) return Promise.resolve(false);
   if (confirmClose) {
-    const connected = $('termstatus').textContent === 'connected';
+    const connected = tabStats[tabId]?.status === 'connected';
     if (connected && appSettings.confirmClose && !confirm(`Close ${document.querySelector(`#tabs .tab[data-tab="${tabId}"]`)?.textContent || 'tab'}?`)) return Promise.resolve(false);
   }
   return window.filessh.disconnect(tabId).then(() => {
     document.querySelector(`#tabs .tab[data-tab="${tabId}"]`)?.remove();
+    const t = termTabs.get(tabId);
+    if (t) {
+      try { t.term.dispose(); } catch {}
+      t.pane.remove();
+      termTabs.delete(tabId);
+    }
+    delete tabStats[tabId];
     if (currentTabId === tabId) currentTabId = null;
     activeTab = 'overview';
     paintTabs();
