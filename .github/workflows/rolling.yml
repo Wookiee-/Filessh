@@ -109,6 +109,5 @@ jobs:
           gh release delete Releases --cleanup-tag --yes || true
           gh release create Releases $(find dist -type f) \
             --target "$GITHUB_SHA" \
-            --prerelease \
             --title "Filessh ($(git rev-parse --short HEAD))" \
             --notes "Automatically built from main at $GITHUB_SHA."
