@@ -102,13 +102,13 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Replace rolling release
+      - name: Replace Releases release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete rolling --cleanup-tag --yes || true
-          gh release create rolling $(find dist -type f) \
+          gh release delete Releases --cleanup-tag --yes || true
+          gh release create Releases $(find dist -type f) \
             --target "$GITHUB_SHA" \
             --prerelease \
-            --title "Filessh rolling ($(git rev-parse --short HEAD))" \
+            --title "Filessh ($(git rev-parse --short HEAD))" \
             --notes "Automatically built from main at $GITHUB_SHA."
