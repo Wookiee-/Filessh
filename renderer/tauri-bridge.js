@@ -40,5 +40,9 @@
     onVerify: function (tabId, cb) { on('ssh-verify-' + tabId, function (s) { cb(s); }); },
     respondVerify: function (tabId, decision) { invoke('ssh_verify_response', { tabId: tabId, decision: decision }); },
     onMenu: function () {},
+    clipboard: {
+      readText: function () { return T.clipboardManager.readText(); },
+      writeText: function (text) { return T.clipboardManager.writeText(text); },
+    },
   };
 })();

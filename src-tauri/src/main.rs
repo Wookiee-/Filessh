@@ -329,6 +329,7 @@ fn main() {
     }
     let state: SharedState = Arc::new(ssh::AppStateInner::default());
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             sessions_list, sessions_save, sessions_delete,

@@ -6,6 +6,23 @@ let tabSeq = 0;
 
 const $ = (id) => document.getElementById(id);
 
+// Refit the visible terminal whenever its container changes size (window
+// maximize/restore, sidebar or SFTP panel toggles). Without this the grid
+// stays at the size it had at connect/tab-switch time.
+let fitRaf = 0;
+new ResizeObserver(() => {
+  cancelAnimationFrame(fitRaf);
+  fitRaf = requestAnimationFrame(() => {
+    const t = termTabs.get(currentTabId);
+    if (t && activeTab !== 'overview') { try { t.fit.fit(); } catch {} }
+  });
+}).observe($('terminal'));
+
+const clipboard = window.filessh.clipboard || {
+  readText: () => navigator.clipboard.readText(),
+  writeText: (text) => navigator.clipboard.writeText(text),
+};
+
 // ---- GUI theme (app chrome; terminal themes are separate) ----
 const GUI_THEMES = { light: 'Light', dark: 'Dark', nord: 'Nord', dracula: 'Dracula', solar: 'Solarized', ocean: 'Ocean', latte: 'Latte', mocha: 'Mocha', gruvbox: 'Gruvbox', tokyo: 'Tokyo Night', onedark: 'One Dark', palenight: 'Palenight' };
 let guiTheme = localStorage.getItem('filessh-gui-theme') || 'light';
@@ -256,14 +273,14 @@ function showTerminal(tabId, label, sessionId) {
     ev.preventDefault();
     if (!appSettings.pasteRight) return;
     try {
-      const text = await navigator.clipboard.readText();
+      const text = await clipboard.readText();
       if (text) window.filessh.sendInput(tabId, btoa(unescape(encodeURIComponent(text))));
     } catch {}
     term.focus();
   };
   term.onSelectionChange(() => {
     if (!appSettings.copySelect) return;
-    try { navigator.clipboard.writeText(term.getSelection()); } catch {}
+    try { clipboard.writeText(term.getSelection()); } catch {}
   });
   term.onData((d) => window.filessh.sendInput(tabId, btoa(unescape(encodeURIComponent(d)))));
   // Only forward genuine size changes: the pty already opens at the fitted
